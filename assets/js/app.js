@@ -272,11 +272,20 @@ class DriveApp {
         this.drives = newDrives;
         this.renderDriveList();
 
-        if (isInitial && newDrives.length > 0) {
-          // Pilih flashdisk jika ada, jika tidak buka drive pertama
-          const usbDrive = newDrives.find(d => d.isRemovable);
-          const targetDrive = usbDrive || newDrives[0];
-          this.navigate(targetDrive.path);
+        if (isInitial) {
+          if (newDrives.length > 0) {
+            // Pilih flashdisk jika ada, jika tidak buka drive pertama
+            const usbDrive = newDrives.find(d => d.isRemovable);
+            const targetDrive = usbDrive || newDrives[0];
+            this.navigate(targetDrive.path);
+          } else {
+            this.el.folderTitle.textContent = 'Belum Ada Drive Terhubung';
+            this.el.folderStats.textContent = '0 item';
+            this.el.emptyState.style.display = 'flex';
+            this.el.fileGrid.style.display = 'none';
+            if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
+            this.el.fileListTable.style.display = 'none';
+          }
         }
       }
     } catch (err) {
@@ -333,6 +342,7 @@ class DriveApp {
   }
 
   async loadDirectory(path, forceRefresh = false) {
+    if (!path) return;
     const cacheKey = path.toUpperCase();
 
     // Tampilkan data dari memori cache secara instan (0ms) jika ada
@@ -352,7 +362,15 @@ class DriveApp {
 
     try {
       const res = await fetch(`api.php?action=list_files&path=${encodeURIComponent(path)}`);
+      if (res.status === 401) {
+        window.location.href = 'login.php';
+        return;
+      }
       const data = await res.json();
+      if (data.auth_required) {
+        window.location.href = 'login.php';
+        return;
+      }
 
       if (!data.success) {
         this.showToast(data.message || 'Gagal membuka direktori', 'error');

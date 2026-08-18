@@ -29,9 +29,10 @@ return [
 
     /**
      * Daftar Drive yang DIKECUALIKAN / DISEMBUNYIKAN:
-     * Drive dalam daftar ini TIDAK AKAN ditampilkan di web dan DIBLOKIR dari semua akses.
+     * Contoh: ['C:'] jika ingin menyembunyikan drive sistem C:
+     * Kosongkan [] jika ingin menampilkan semua drive yang tersedia di laptop.
      */
-    'excluded_drives' => ['C:'],
+    'excluded_drives' => [],
 
     /**
      * Sembunyikan folder & file sistem Windows ($RECYCLE.BIN, System Volume Information, dsb)
