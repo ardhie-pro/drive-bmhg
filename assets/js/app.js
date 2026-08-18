@@ -354,6 +354,13 @@ class DriveApp {
     });
   }
 
+  async navigate(path) {
+    if (!path) return;
+    this.currentPath = path;
+    await this.loadDirectory(path);
+    this.renderDriveList();
+  }
+
   async loadDirectory(path, forceRefresh = false) {
     if (!path) return;
     const cacheKey = path.toUpperCase();
