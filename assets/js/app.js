@@ -433,7 +433,7 @@ class DriveApp {
       const type = this.getFileTypeCategory(item);
       const isImage = type === 'image';
       const isArchive = type === 'archive';
-      const previewThumbUrl = `api.php?action=preview&path=${encodeURIComponent(item.path)}`;
+      const thumbUrl = `api.php?action=thumb&path=${encodeURIComponent(item.path)}`;
 
       const card = document.createElement('div');
       card.className = `file-card ${item.isDir ? 'is-dir' : `type-${type}`}`;
@@ -448,7 +448,7 @@ class DriveApp {
           <button class="btn-action-icon delete-btn" title="Hapus"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         </div>
         <div class="file-thumb">
-          ${isImage ? `<img src="${previewThumbUrl}" class="file-card-img-thumb" loading="lazy" alt="${item.name}" onerror="this.outerHTML='${this.getFileIconSvg('image', false)}'">` : this.getFileIconSvg(type, item.isDir)}
+          ${isImage ? `<img src="${thumbUrl}" class="file-card-img-thumb" loading="lazy" decoding="async" alt="${item.name}" onerror="this.outerHTML='${this.getFileIconSvg('image', false)}'">` : this.getFileIconSvg(type, item.isDir)}
         </div>
         <div class="file-name" title="${item.name}">${item.name}</div>
         <div class="file-details">${item.isDir ? 'Folder' : item.sizeFormatted}</div>
@@ -483,7 +483,7 @@ class DriveApp {
       const type = this.getFileTypeCategory(item);
       const isImage = type === 'image';
       const isArchive = type === 'archive';
-      const previewThumbUrl = `api.php?action=preview&path=${encodeURIComponent(item.path)}`;
+      const thumbUrl = `api.php?action=thumb&path=${encodeURIComponent(item.path)}`;
 
       const card = document.createElement('div');
       card.className = `gallery-card ${item.isDir ? 'is-dir' : `type-${type}`}`;
@@ -491,7 +491,7 @@ class DriveApp {
       card.innerHTML = `
         <div class="gallery-thumb">
           ${isImage ? `
-            <img src="${previewThumbUrl}" class="gallery-img" loading="lazy" alt="${item.name}" onerror="this.outerHTML='<div class=\\'gallery-icon-wrap\\'>${this.getFileIconSvg('image', false)}</div>'">
+            <img src="${thumbUrl}" class="gallery-img" loading="lazy" decoding="async" alt="${item.name}" onerror="this.outerHTML='<div class=\\'gallery-icon-wrap\\'>${this.getFileIconSvg('image', false)}</div>'">
             <span class="gallery-badge-type">${item.extension.toUpperCase()}</span>
           ` : `
             <div class="gallery-icon-wrap">${this.getFileIconSvg(type, item.isDir)}</div>

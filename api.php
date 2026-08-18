@@ -105,6 +105,140 @@ function getMimeType(string $filePath): string {
 }
 
 /**
+ * Menghasilkan & men-cache thumbnail gambar super cepat (WebP / JPEG 280px)
+ */
+function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeight = 280): void {
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+
+    while (ob_get_level()) {
+        ob_end_clean();
+    }
+
+    $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+
+    // SVG atau ICO langsung sajikan tanpa resize
+    if ($ext === 'svg' || $ext === 'ico') {
+        header('Content-Type: ' . ($ext === 'svg' ? 'image/svg+xml' : 'image/x-icon'));
+        header('Cache-Control: public, max-age=604800, immutable');
+        readfile($filePath);
+        exit;
+    }
+
+    if (!extension_loaded('gd')) {
+        header('Content-Type: ' . getMimeType($filePath));
+        header('Cache-Control: public, max-age=604800, immutable');
+        readfile($filePath);
+        exit;
+    }
+
+    $mtime = @filemtime($filePath) ?: 0;
+    $fsize = @filesize($filePath) ?: 0;
+    $cacheKey = md5($filePath . '_' . $mtime . '_' . $fsize . '_' . $maxWidth . 'x' . $maxHeight);
+    $cacheDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_thumb_cache';
+
+    if (!is_dir($cacheDir)) {
+        @mkdir($cacheDir, 0777, true);
+    }
+
+    $supportWebp = function_exists('imagewebp');
+    $cacheExt = $supportWebp ? '.webp' : '.jpg';
+    $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . $cacheExt;
+    $etag = '"' . $cacheKey . '"';
+
+    // HTTP 304 Not Modified check jika browser sudah punya cache
+    if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
+        http_response_code(304);
+        exit;
+    }
+
+    if (file_exists($cacheFile) && filesize($cacheFile) > 0) {
+        header('Content-Type: ' . ($supportWebp ? 'image/webp' : 'image/jpeg'));
+        header('Content-Length: ' . filesize($cacheFile));
+        header('Cache-Control: public, max-age=2592000, immutable');
+        header('ETag: ' . $etag);
+        readfile($cacheFile);
+        exit;
+    }
+
+    // Buat thumbnail baru berukuran ringan
+    $srcImg = null;
+    switch ($ext) {
+        case 'jpg':
+        case 'jpeg':
+            if (function_exists('imagecreatefromjpeg')) $srcImg = @imagecreatefromjpeg($filePath);
+            break;
+        case 'png':
+            if (function_exists('imagecreatefrompng')) $srcImg = @imagecreatefrompng($filePath);
+            break;
+        case 'webp':
+            if (function_exists('imagecreatefromwebp')) $srcImg = @imagecreatefromwebp($filePath);
+            break;
+        case 'gif':
+            if (function_exists('imagecreatefromgif')) $srcImg = @imagecreatefromgif($filePath);
+            break;
+        case 'bmp':
+            if (function_exists('imagecreatefrombmp')) $srcImg = @imagecreatefrombmp($filePath);
+            break;
+    }
+
+    if (!$srcImg) {
+        // Fallback jika format khusus tidak didukung GD
+        header('Content-Type: ' . getMimeType($filePath));
+        header('Cache-Control: public, max-age=604800');
+        readfile($filePath);
+        exit;
+    }
+
+    $origW = imagesx($srcImg);
+    $origH = imagesy($srcImg);
+
+    if ($origW <= 0 || $origH <= 0) {
+        imagedestroy($srcImg);
+        header('Content-Type: ' . getMimeType($filePath));
+        readfile($filePath);
+        exit;
+    }
+
+    // Hitung dimensi target proporsional (max 280px)
+    $ratio = min($maxWidth / $origW, $maxHeight / $origH, 1.0);
+    $newW = max(1, (int)round($origW * $ratio));
+    $newH = max(1, (int)round($origH * $ratio));
+
+    $thumb = imagecreatetruecolor($newW, $newH);
+
+    // Support transparansi PNG / WebP / GIF
+    if ($ext === 'png' || $ext === 'webp' || $ext === 'gif') {
+        imagealphablending($thumb, false);
+        imagesavealpha($thumb, true);
+        $transparent = imagecolorallocatealpha($thumb, 255, 255, 255, 127);
+        imagefilledrectangle($thumb, 0, 0, $newW, $newH, $transparent);
+    }
+
+    imagecopyresampled($thumb, $srcImg, 0, 0, 0, 0, $newW, $newH, $origW, $origH);
+    imagedestroy($srcImg);
+
+    if ($supportWebp) {
+        @imagewebp($thumb, $cacheFile, 78);
+        header('Content-Type: image/webp');
+    } else {
+        @imagejpeg($thumb, $cacheFile, 80);
+        header('Content-Type: image/jpeg');
+    }
+
+    imagedestroy($thumb);
+
+    if (file_exists($cacheFile)) {
+        header('Content-Length: ' . filesize($cacheFile));
+        header('Cache-Control: public, max-age=2592000, immutable');
+        header('ETag: ' . $etag);
+        readfile($cacheFile);
+    }
+    exit;
+}
+
+/**
  * Mendapatkan daftar seluruh drive aktif di Windows
  */
 /**
@@ -614,6 +748,20 @@ try {
                 }
                 fclose($fp);
             }
+        case 'thumb':
+            $targetPath = normalizePath($_GET['path'] ?? '');
+
+            if (isPathExcluded($targetPath, $excludedDrives)) {
+                http_response_code(403);
+                die('Akses ke drive ini diblokir pada konfigurasi keamanan.');
+            }
+
+            if (empty($targetPath) || !file_exists($targetPath) || is_dir($targetPath)) {
+                http_response_code(404);
+                die('File tidak ditemukan.');
+            }
+
+            serveImageThumbnail($targetPath, 280, 280);
             exit;
 
         case 'preview':
