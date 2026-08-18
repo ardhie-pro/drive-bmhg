@@ -11,7 +11,7 @@ class DriveApp {
     this.drives = [];
     this.items = [];
     this.filteredItems = [];
-    this.viewMode = 'grid'; // 'grid' | 'list'
+    this.viewMode = localStorage.getItem('drive_view_mode') || 'grid'; // 'grid' | 'gallery' | 'list'
     this.activeUploads = new Map();
     this.selectedItem = null;
     this.historyStack = [];
@@ -32,6 +32,7 @@ class DriveApp {
       folderTitle: document.getElementById('folderTitle'),
       folderStats: document.getElementById('folderStats'),
       fileGrid: document.getElementById('fileGrid'),
+      fileGallery: document.getElementById('fileGallery'),
       fileListTable: document.getElementById('fileListTable'),
       fileListTbody: document.getElementById('fileListTbody'),
       emptyState: document.getElementById('emptyState'),
@@ -41,6 +42,7 @@ class DriveApp {
       btnDownloadZip: document.getElementById('btnDownloadZip'),
       btnRefreshFolder: document.getElementById('btnRefreshFolder'),
       btnViewGrid: document.getElementById('btnViewGrid'),
+      btnViewGallery: document.getElementById('btnViewGallery'),
       btnViewList: document.getElementById('btnViewList'),
       btnNavBack: document.getElementById('btnNavBack'),
       btnNavForward: document.getElementById('btnNavForward'),
@@ -64,6 +66,16 @@ class DriveApp {
       deleteModal: document.getElementById('deleteModal'),
       deleteItemName: document.getElementById('deleteItemName'),
       btnConfirmDelete: document.getElementById('btnConfirmDelete'),
+
+      compressModal: document.getElementById('compressModal'),
+      compressZipNameInput: document.getElementById('compressZipNameInput'),
+      compressItemName: document.getElementById('compressItemName'),
+      btnConfirmCompress: document.getElementById('btnConfirmCompress'),
+
+      extractModal: document.getElementById('extractModal'),
+      extractFolderNameInput: document.getElementById('extractFolderNameInput'),
+      extractItemName: document.getElementById('extractItemName'),
+      btnConfirmExtract: document.getElementById('btnConfirmExtract'),
 
       previewModal: document.getElementById('previewModal'),
       previewTitle: document.getElementById('previewTitle'),
@@ -94,6 +106,7 @@ class DriveApp {
 
     // View switchers
     this.el.btnViewGrid?.addEventListener('click', () => this.setViewMode('grid'));
+    this.el.btnViewGallery?.addEventListener('click', () => this.setViewMode('gallery'));
     this.el.btnViewList?.addEventListener('click', () => this.setViewMode('list'));
 
     // Upload button
@@ -120,6 +133,18 @@ class DriveApp {
 
     // Delete
     this.el.btnConfirmDelete?.addEventListener('click', () => this.submitDelete());
+
+    // Compress to ZIP
+    this.el.btnConfirmCompress?.addEventListener('click', () => this.submitCompress());
+    this.el.compressZipNameInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.submitCompress();
+    });
+
+    // Extract Archive
+    this.el.btnConfirmExtract?.addEventListener('click', () => this.submitExtract());
+    this.el.extractFolderNameInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.submitExtract();
+    });
 
     // Download Folder as ZIP
     this.el.btnDownloadZip?.addEventListener('click', () => {
@@ -342,20 +367,28 @@ class DriveApp {
     if (this.filteredItems.length === 0) {
       this.el.emptyState.style.display = 'flex';
       this.el.fileGrid.style.display = 'none';
+      if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
       this.el.fileListTable.style.display = 'none';
       return;
     }
 
     this.el.emptyState.style.display = 'none';
 
-    if (this.viewMode === 'grid') {
-      this.el.fileGrid.style.display = 'grid';
-      this.el.fileListTable.style.display = 'none';
-      this.renderGridView();
-    } else {
+    if (this.viewMode === 'gallery') {
       this.el.fileGrid.style.display = 'none';
+      if (this.el.fileGallery) this.el.fileGallery.style.display = 'grid';
+      this.el.fileListTable.style.display = 'none';
+      this.renderGalleryView();
+    } else if (this.viewMode === 'list') {
+      this.el.fileGrid.style.display = 'none';
+      if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
       this.el.fileListTable.style.display = 'table';
       this.renderListView();
+    } else {
+      this.el.fileGrid.style.display = 'grid';
+      if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
+      this.el.fileListTable.style.display = 'none';
+      this.renderGridView();
     }
   }
 
@@ -398,18 +431,24 @@ class DriveApp {
     this.el.fileGrid.innerHTML = '';
     this.filteredItems.forEach(item => {
       const type = this.getFileTypeCategory(item);
+      const isImage = type === 'image';
+      const isArchive = type === 'archive';
+      const previewThumbUrl = `api.php?action=preview&path=${encodeURIComponent(item.path)}`;
+
       const card = document.createElement('div');
       card.className = `file-card ${item.isDir ? 'is-dir' : `type-${type}`}`;
 
       card.innerHTML = `
         <div class="file-actions-hover">
           ${!item.isDir ? `<button class="btn-action-icon preview-btn" title="Lihat Preview"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>` : ''}
+          ${isArchive ? `<button class="btn-action-icon extract-btn" title="Ekstrak Arsip (ZIP/RAR)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><polyline points="10 12 15 12 15 7"/><line x1="15" y1="12" x2="9" y2="18"/></svg></button>` : ''}
+          <button class="btn-action-icon compress-btn" title="Kompres ke ZIP"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
           <button class="btn-action-icon download-btn" title="Unduh ${item.isDir ? 'sebagai ZIP' : ''}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
           <button class="btn-action-icon rename-btn" title="Ganti Nama"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>
           <button class="btn-action-icon delete-btn" title="Hapus"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         </div>
         <div class="file-thumb">
-          ${this.getFileIconSvg(type, item.isDir)}
+          ${isImage ? `<img src="${previewThumbUrl}" class="file-card-img-thumb" loading="lazy" alt="${item.name}" onerror="this.outerHTML='${this.getFileIconSvg('image', false)}'">` : this.getFileIconSvg(type, item.isDir)}
         </div>
         <div class="file-name" title="${item.name}">${item.name}</div>
         <div class="file-details">${item.isDir ? 'Folder' : item.sizeFormatted}</div>
@@ -426,6 +465,8 @@ class DriveApp {
 
       // Actions
       card.querySelector('.preview-btn')?.addEventListener('click', () => this.openPreview(item));
+      card.querySelector('.extract-btn')?.addEventListener('click', () => this.openExtractModal(item));
+      card.querySelector('.compress-btn')?.addEventListener('click', () => this.openCompressModal(item));
       card.querySelector('.download-btn')?.addEventListener('click', () => this.downloadItem(item.path, item.isDir));
       card.querySelector('.rename-btn')?.addEventListener('click', () => this.openRenameModal(item));
       card.querySelector('.delete-btn')?.addEventListener('click', () => this.openDeleteModal(item));
@@ -434,10 +475,72 @@ class DriveApp {
     });
   }
 
+  renderGalleryView() {
+    if (!this.el.fileGallery) return;
+    this.el.fileGallery.innerHTML = '';
+
+    this.filteredItems.forEach(item => {
+      const type = this.getFileTypeCategory(item);
+      const isImage = type === 'image';
+      const isArchive = type === 'archive';
+      const previewThumbUrl = `api.php?action=preview&path=${encodeURIComponent(item.path)}`;
+
+      const card = document.createElement('div');
+      card.className = `gallery-card ${item.isDir ? 'is-dir' : `type-${type}`}`;
+
+      card.innerHTML = `
+        <div class="gallery-thumb">
+          ${isImage ? `
+            <img src="${previewThumbUrl}" class="gallery-img" loading="lazy" alt="${item.name}" onerror="this.outerHTML='<div class=\\'gallery-icon-wrap\\'>${this.getFileIconSvg('image', false)}</div>'">
+            <span class="gallery-badge-type">${item.extension.toUpperCase()}</span>
+          ` : `
+            <div class="gallery-icon-wrap">${this.getFileIconSvg(type, item.isDir)}</div>
+            ${!item.isDir ? `<span class="gallery-badge-type">${item.extension ? item.extension.toUpperCase() : 'FILE'}</span>` : ''}
+          `}
+
+          <div class="gallery-actions-hover">
+            ${!item.isDir ? `<button class="btn-action-icon preview-btn" title="Lihat Preview"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>` : ''}
+            ${isArchive ? `<button class="btn-action-icon extract-btn" title="Ekstrak Arsip (ZIP/RAR)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><polyline points="10 12 15 12 15 7"/><line x1="15" y1="12" x2="9" y2="18"/></svg></button>` : ''}
+            <button class="btn-action-icon compress-btn" title="Kompres ke ZIP"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
+            <button class="btn-action-icon download-btn" title="Unduh ${item.isDir ? 'sebagai ZIP' : ''}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+            <button class="btn-action-icon rename-btn" title="Ganti Nama"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>
+            <button class="btn-action-icon delete-btn" title="Hapus"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+          </div>
+        </div>
+        <div class="gallery-info">
+          <div class="gallery-name" title="${item.name}">${item.name}</div>
+          <div class="gallery-meta">
+            <span>${item.isDir ? 'Folder' : item.sizeFormatted}</span>
+            <span>${item.modifiedTime.split(' ')[0] || ''}</span>
+          </div>
+        </div>
+      `;
+
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.gallery-actions-hover')) return;
+        if (item.isDir) {
+          this.navigate(item.path);
+        } else {
+          this.openPreview(item);
+        }
+      });
+
+      card.querySelector('.preview-btn')?.addEventListener('click', () => this.openPreview(item));
+      card.querySelector('.extract-btn')?.addEventListener('click', () => this.openExtractModal(item));
+      card.querySelector('.compress-btn')?.addEventListener('click', () => this.openCompressModal(item));
+      card.querySelector('.download-btn')?.addEventListener('click', () => this.downloadItem(item.path, item.isDir));
+      card.querySelector('.rename-btn')?.addEventListener('click', () => this.openRenameModal(item));
+      card.querySelector('.delete-btn')?.addEventListener('click', () => this.openDeleteModal(item));
+
+      this.el.fileGallery.appendChild(card);
+    });
+  }
+
   renderListView() {
     this.el.fileListTbody.innerHTML = '';
     this.filteredItems.forEach(item => {
       const type = this.getFileTypeCategory(item);
+      const isArchive = type === 'archive';
       const tr = document.createElement('tr');
 
       tr.innerHTML = `
@@ -454,6 +557,8 @@ class DriveApp {
         <td style="text-align:right;">
           <div style="display:inline-flex; gap:4px;">
             ${!item.isDir ? `<button class="btn-action-icon preview-btn" title="Preview"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>` : ''}
+            ${isArchive ? `<button class="btn-action-icon extract-btn" title="Ekstrak Arsip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><polyline points="10 12 15 12 15 7"/><line x1="15" y1="12" x2="9" y2="18"/></svg></button>` : ''}
+            <button class="btn-action-icon compress-btn" title="Kompres ke ZIP"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
             <button class="btn-action-icon download-btn" title="Unduh"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
             <button class="btn-action-icon rename-btn" title="Ganti Nama"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>
             <button class="btn-action-icon delete-btn" title="Hapus"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
@@ -471,6 +576,8 @@ class DriveApp {
       });
 
       tr.querySelector('.preview-btn')?.addEventListener('click', () => this.openPreview(item));
+      tr.querySelector('.extract-btn')?.addEventListener('click', () => this.openExtractModal(item));
+      tr.querySelector('.compress-btn')?.addEventListener('click', () => this.openCompressModal(item));
       tr.querySelector('.download-btn')?.addEventListener('click', () => this.downloadItem(item.path, item.isDir));
       tr.querySelector('.rename-btn')?.addEventListener('click', () => this.openRenameModal(item));
       tr.querySelector('.delete-btn')?.addEventListener('click', () => this.openDeleteModal(item));
@@ -481,13 +588,12 @@ class DriveApp {
 
   setViewMode(mode) {
     this.viewMode = mode;
-    if (mode === 'grid') {
-      this.el.btnViewGrid.classList.add('active');
-      this.el.btnViewList.classList.remove('active');
-    } else {
-      this.el.btnViewList.classList.add('active');
-      this.el.btnViewGrid.classList.remove('active');
-    }
+    localStorage.setItem('drive_view_mode', mode);
+
+    this.el.btnViewGrid?.classList.toggle('active', mode === 'grid');
+    this.el.btnViewGallery?.classList.toggle('active', mode === 'gallery');
+    this.el.btnViewList?.classList.toggle('active', mode === 'list');
+
     this.renderItems();
   }
 
@@ -685,6 +791,86 @@ class DriveApp {
     }
   }
 
+  /* Compress to ZIP Modal */
+  openCompressModal(item) {
+    this.selectedItem = item;
+    this.el.compressItemName.textContent = item.name;
+    const baseName = item.name.replace(/\.[^/.]+$/, '');
+    this.el.compressZipNameInput.value = `${baseName}.zip`;
+    this.el.compressModal.classList.add('active');
+    setTimeout(() => {
+      this.el.compressZipNameInput.focus();
+      this.el.compressZipNameInput.select();
+    }, 100);
+  }
+
+  async submitCompress() {
+    if (!this.selectedItem) return;
+    const zipName = this.el.compressZipNameInput.value.trim();
+
+    this.showToast('Sedang membuat arsip ZIP...', 'info');
+    this.closeModals();
+
+    const formData = new FormData();
+    formData.append('action', 'compress_zip');
+    formData.append('path', this.selectedItem.path);
+    formData.append('zipName', zipName);
+
+    try {
+      const res = await fetch('api.php', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.success) {
+        this.showToast(data.message || 'Arsip ZIP berhasil dibuat', 'success');
+        this.loadDirectory(this.currentPath);
+      } else {
+        this.showToast(data.message || 'Gagal membuat arsip ZIP', 'error');
+      }
+    } catch (err) {
+      this.showToast('Terjadi kesalahan: ' + err.message, 'error');
+    }
+  }
+
+  /* Extract Archive Modal */
+  openExtractModal(item) {
+    this.selectedItem = item;
+    this.el.extractItemName.textContent = item.name;
+    const baseFolder = item.name.replace(/\.[^/.]+$/, '');
+    this.el.extractFolderNameInput.value = baseFolder;
+    this.el.extractModal.classList.add('active');
+    setTimeout(() => {
+      this.el.extractFolderNameInput.focus();
+      this.el.extractFolderNameInput.select();
+    }, 100);
+  }
+
+  async submitExtract() {
+    if (!this.selectedItem) return;
+    const targetFolder = this.el.extractFolderNameInput.value.trim();
+
+    this.showToast('Sedang mengekstrak arsip file...', 'info');
+    this.closeModals();
+
+    const formData = new FormData();
+    formData.append('action', 'extract_archive');
+    formData.append('path', this.selectedItem.path);
+    formData.append('targetFolder', targetFolder);
+
+    try {
+      const res = await fetch('api.php', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.success) {
+        this.showToast(data.message || 'Arsip berhasil diekstrak', 'success');
+        this.loadDirectory(this.currentPath);
+      } else {
+        this.showToast(data.message || 'Gagal mengekstrak arsip', 'error');
+      }
+    } catch (err) {
+      this.showToast('Terjadi kesalahan: ' + err.message, 'error');
+    }
+  }
+
   /* File Preview Modal */
   async openPreview(item) {
     const type = this.getFileTypeCategory(item);
@@ -704,28 +890,45 @@ class DriveApp {
         this.el.previewContainer.innerHTML = '';
         this.el.previewContainer.appendChild(img);
       };
+      img.onerror = () => {
+        this.el.previewContainer.innerHTML = '<div style="color:var(--accent-rose);">Gagal memuat gambar.</div>';
+      };
     } else if (type === 'video') {
-      this.el.previewContainer.innerHTML = `
-        <video class="preview-video" controls autoplay>
-          <source src="${previewUrl}" type="${item.mimeType}">
-          Browser Anda tidak mendukung pemutaran video ini.
-        </video>
-      `;
+      const videoEl = document.createElement('video');
+      videoEl.className = 'preview-video';
+      videoEl.controls = true;
+      videoEl.autoplay = true;
+      videoEl.preload = 'metadata';
+      videoEl.playsInline = true;
+      videoEl.src = previewUrl;
+      videoEl.onerror = () => {
+        this.el.previewContainer.innerHTML = `
+          <div style="text-align:center; color:#E2E8F0; padding:24px;">
+            <div style="font-size:3rem; margin-bottom:12px;">🎬</div>
+            <p style="margin-bottom:8px; font-weight:600;">Format video tidak dapat diputar langsung di browser.</p>
+            <p style="font-size:0.85rem; color:#94A3B8; margin-bottom:16px;">Silakan unduh file untuk memutarnya menggunakan aplikasi pemutar video lokal di komputer Anda.</p>
+            <button class="btn btn-primary" onclick="driveApp.downloadItem('${encodeURIComponent(item.path)}', false)">Unduh File Video</button>
+          </div>
+        `;
+      };
+      this.el.previewContainer.innerHTML = '';
+      this.el.previewContainer.appendChild(videoEl);
     } else if (type === 'audio') {
-      this.el.previewContainer.innerHTML = `
-        <div style="text-align:center;">
-          <div style="font-size:3rem; margin-bottom:16px; color:var(--accent-emerald);">🎵</div>
-          <audio class="preview-audio" controls autoplay>
-            <source src="${previewUrl}" type="${item.mimeType}">
-            Browser Anda tidak mendukung pemutaran audio ini.
-          </audio>
-        </div>
+      const audioContainer = document.createElement('div');
+      audioContainer.style.textAlign = 'center';
+      audioContainer.innerHTML = `
+        <div style="font-size:3rem; margin-bottom:16px; color:var(--accent-emerald);">🎵</div>
+        <audio class="preview-audio" controls autoplay preload="metadata" src="${previewUrl}">
+          Browser Anda tidak mendukung pemutaran audio ini.
+        </audio>
       `;
+      this.el.previewContainer.innerHTML = '';
+      this.el.previewContainer.appendChild(audioContainer);
     } else if (type === 'pdf') {
       this.el.previewContainer.innerHTML = `
         <iframe class="preview-iframe" src="${previewUrl}"></iframe>
       `;
-    } else if (type === 'code' || type === 'doc' && ['txt', 'md', 'json', 'log', 'csv'].includes(item.extension)) {
+    } else if (type === 'code' || type === 'doc' && ['txt', 'md', 'json', 'log', 'csv', 'ini', 'env', 'sql', 'xml'].includes(item.extension)) {
       try {
         const res = await fetch(previewUrl);
         const text = await res.text();
