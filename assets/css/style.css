@@ -1436,3 +1436,160 @@ body {
 .toast.success { background: #0D9488; box-shadow: 0 6px 20px rgba(13, 148, 136, 0.3); }
 .toast.error { background: #E11D48; box-shadow: 0 6px 20px rgba(225, 29, 72, 0.3); }
 .toast.info { background: var(--bmhg-navy); }
+
+/* ====================================================
+   Floating Bulk Action Bar & Multi-Select
+   ==================================================== */
+.bulk-action-bar {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%) translateY(120px);
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  padding: 8px 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 16px 36px -6px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  z-index: 250;
+  transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bulk-action-bar.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bulk-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.bulk-badge-count {
+  background: var(--bmhg-gold, #D97706);
+  color: #FFFFFF;
+  font-weight: 800;
+  font-size: 0.82rem;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(217, 119, 6, 0.4);
+}
+
+.bulk-label {
+  color: #F8FAFC;
+  font-size: 0.88rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-bulk {
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border: none;
+  transition: var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn-bulk-primary {
+  background: #3B82F6;
+  color: #FFFFFF;
+}
+.btn-bulk-primary:hover {
+  background: #2563EB;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.btn-bulk-secondary {
+  background: rgba(255, 255, 255, 0.12);
+  color: #F8FAFC;
+}
+.btn-bulk-secondary:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.btn-bulk-danger {
+  background: rgba(225, 29, 72, 0.85);
+  color: #FFFFFF;
+}
+.btn-bulk-danger:hover {
+  background: #E11D48;
+  box-shadow: 0 4px 12px rgba(225, 29, 72, 0.4);
+}
+
+.btn-bulk-ghost {
+  background: transparent;
+  color: #94A3B8;
+}
+.btn-bulk-ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+}
+
+/* Item Checkbox on Grid, Gallery & List */
+.file-select-checkbox {
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  accent-color: #1A2185;
+  cursor: pointer;
+}
+
+.file-card-checkbox-wrap {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 3px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.file-card:hover .file-card-checkbox-wrap,
+.gallery-card:hover .file-card-checkbox-wrap,
+.file-card.selected .file-card-checkbox-wrap,
+.gallery-card.selected .file-card-checkbox-wrap {
+  opacity: 1;
+}
+
+.file-card.selected,
+.gallery-card.selected {
+  border-color: #2563EB !important;
+  background: #EFF6FF !important;
+  box-shadow: 0 0 0 2px #2563EB !important;
+}
+
+tr.selected {
+  background-color: #EFF6FF !important;
+}
+

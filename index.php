@@ -130,13 +130,21 @@ $currentUser = $_SESSION['drive_user'] ?? [
             <span>Folder Baru</span>
           </button>
 
-          <button id="btnUploadFile" class="btn btn-primary">
+          <button id="btnUploadFile" class="btn btn-primary" title="Upload satu atau beberapa file">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="17 8 12 3 7 8"/>
               <line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
             <span>Upload File</span>
+          </button>
+
+          <button id="btnUploadFolder" class="btn btn-secondary" title="Upload satu folder beserta seluruh isinya">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              <polyline points="12 11 12 17 15 14"/>
+            </svg>
+            <span>Upload Folder</span>
           </button>
 
           <button id="btnDownloadZip" class="btn btn-secondary" title="Unduh semua file dalam folder ini sebagai ZIP">
@@ -178,34 +186,43 @@ $currentUser = $_SESSION['drive_user'] ?? [
           </div>
 
           <!-- User SSO Profile Badge -->
-          <div class="user-profile-badge">
-            <div class="user-avatar-circle"><?= htmlspecialchars(strtoupper(substr($currentUser['name'] ?? 'U', 0, 1)), ENT_QUOTES, 'UTF-8') ?></div>
-            <div class="user-profile-info">
-              <span class="user-name-text" title="<?= htmlspecialchars($currentUser['name'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($currentUser['name'], ENT_QUOTES, 'UTF-8') ?></span>
-              <span class="user-role-tag"><?= htmlspecialchars(ucfirst($currentUser['status'] ?? 'user'), ENT_QUOTES, 'UTF-8') ?></span>
+          <div class="user-profile-badge" title="Login via SSO BMHG (<?= htmlspecialchars($userRole) ?>)">
+            <div class="user-avatar-circle">
+              <?= strtoupper(substr($userName, 0, 1)) ?>
             </div>
-            <a href="logout.php" class="btn-logout-icon" title="Keluar / Logout SSO">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                <polyline points="16 17 21 12 16 7"></polyline>
-                <line x1="21" y1="12" x2="9" y2="12"></line>
+            <div class="user-meta-info">
+              <span class="user-meta-name"><?= htmlspecialchars($userName) ?></span>
+              <span class="user-meta-role"><?= htmlspecialchars($userRole) ?></span>
+            </div>
+            <a href="logout.php" class="btn-logout-badge" title="Keluar / Logout">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
               </svg>
             </a>
           </div>
         </div>
       </header>
 
-      <!-- Explorer View Content -->
-      <section class="explorer-container">
-        <!-- Subheader info -->
-        <div class="explorer-meta-header">
-          <div class="folder-title-wrap">
-            <h1 id="folderTitle" class="folder-title">Memuat...</h1>
-            <span id="folderStats" class="folder-stats-badge">0 item</span>
+      <!-- Main Explorer Body -->
+      <div class="explorer-body">
+        <!-- Breadcrumbs bar -->
+        <div class="breadcrumbs-container">
+          <div id="breadcrumbs" class="breadcrumbs-list">
+            <!-- Breadcrumbs injected via JS -->
           </div>
         </div>
 
-        <div class="content-board-card">
+        <!-- Folder Content Area -->
+        <div class="content-view-area">
+          <div class="content-header-meta">
+            <div>
+              <h2 id="folderTitle" class="folder-main-title">Memuat berkas...</h2>
+              <p id="folderStats" class="folder-sub-stats">-</p>
+            </div>
+          </div>
+
           <!-- Drop Overlay -->
           <div id="dropOverlay" class="drop-zone-overlay">
             <div class="drop-icon-box">
@@ -215,8 +232,8 @@ $currentUser = $_SESSION['drive_user'] ?? [
                 <line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
             </div>
-            <div style="font-size: 1.15rem; font-weight: 700; color: var(--bmhg-navy);">Lepaskan file untuk mengunggah ke folder ini</div>
-            <div style="font-size: 0.85rem; color: var(--text-secondary);">Mendukung multi-file upload & file berukuran besar</div>
+            <div style="font-size: 1.15rem; font-weight: 700; color: var(--bmhg-navy);">Lepaskan file atau folder untuk mengunggah</div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">Mendukung multi-file & folder upload secara otomatis</div>
           </div>
 
           <!-- Grid View -->
@@ -233,6 +250,9 @@ $currentUser = $_SESSION['drive_user'] ?? [
           <table id="fileListTable" class="file-list-table" style="display:none;">
             <thead>
               <tr>
+                <th style="width:36px; text-align:center;">
+                  <input type="checkbox" id="selectAllCheckbox" class="file-select-checkbox" title="Pilih Semua">
+                </th>
                 <th>Nama</th>
                 <th style="width:130px;">Ukuran</th>
                 <th style="width:180px;">Tanggal Modifikasi</th>
@@ -267,8 +287,9 @@ $currentUser = $_SESSION['drive_user'] ?? [
     </main>
   </div>
 
-  <!-- Hidden File Input for Picker -->
+  <!-- Hidden File Inputs for Picker -->
   <input type="file" id="fileInput" multiple style="display:none;">
+  <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none;">
 
   <!-- Floating Upload Drawer -->
   <div id="uploadDrawer" class="upload-drawer">
@@ -440,6 +461,36 @@ $currentUser = $_SESSION['drive_user'] ?? [
       <div id="previewContainer" class="preview-content">
         <!-- Media / Code injected here -->
       </div>
+    </div>
+  </div>
+
+  <!-- Floating Bulk Selection Action Bar -->
+  <div id="bulkActionBar" class="bulk-action-bar">
+    <div class="bulk-info">
+      <div class="bulk-badge-count" id="bulkCount">0</div>
+      <span class="bulk-label">Item Dipilih</span>
+    </div>
+    <div class="bulk-actions">
+      <button id="btnSelectAll" class="btn-bulk btn-bulk-secondary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span>Pilih Semua</span>
+      </button>
+      <button id="btnBulkDownload" class="btn-bulk btn-bulk-primary" title="Unduh semua item yang dipilih dalam 1 file ZIP">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>Unduh (ZIP)</span>
+      </button>
+      <button id="btnBulkCompress" class="btn-bulk btn-bulk-secondary" title="Kompres item terpilih ke arsip ZIP di folder ini">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+        <span>Kompres ZIP</span>
+      </button>
+      <button id="btnBulkDelete" class="btn-bulk btn-bulk-danger" title="Hapus semua item terpilih">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        <span>Hapus</span>
+      </button>
+      <button id="btnDeselectAll" class="btn-bulk btn-bulk-ghost" title="Batalkan pilihan">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <span>Batal</span>
+      </button>
     </div>
   </div>
 
