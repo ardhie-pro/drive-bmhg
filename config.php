@@ -29,10 +29,9 @@ return [
 
     /**
      * Daftar Drive yang DIKECUALIKAN / DISEMBUNYIKAN:
-     * Contoh: ['C:'] jika ingin menyembunyikan drive sistem C:
-     * Kosongkan [] jika ingin menampilkan semua drive yang tersedia di laptop.
+     * Drive C: disembunyikan agar user hanya membuka Flashdisk / Drive data lainnya.
      */
-    'excluded_drives' => [],
+    'excluded_drives' => ['C:'],
 
     /**
      * Sembunyikan folder & file sistem Windows ($RECYCLE.BIN, System Volume Information, dsb)

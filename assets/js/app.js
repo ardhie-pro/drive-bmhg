@@ -6,8 +6,8 @@
 
 class DriveApp {
   constructor() {
-    this.currentPath = 'C:\\';
-    this.currentDriveId = 'C:';
+    this.currentPath = '';
+    this.currentDriveId = '';
     this.drives = [];
     this.items = [];
     this.filteredItems = [];
@@ -298,6 +298,19 @@ class DriveApp {
   renderDriveList() {
     this.el.driveList.innerHTML = '';
     this.el.driveCountBadge.textContent = `${this.drives.length} Terhubung`;
+
+    if (this.drives.length === 0) {
+      this.el.driveList.innerHTML = `
+        <div style="padding: 24px 16px; text-align: center; color: var(--text-muted); font-size: 0.85rem; line-height: 1.5;">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin: 0 auto 10px; display: block; opacity: 0.5;">
+            <path d="M10 13v-3a2 2 0 0 1 4 0v3"/><path d="M12 7V2"/><path d="M6 13h12a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z"/>
+          </svg>
+          <strong style="color: var(--text-primary); display: block; margin-bottom: 4px;">Flashdisk Belum Terdeteksi</strong>
+          Drive C: telah disembunyikan. Silakan colokkan Flashdisk (USB) ke laptop.
+        </div>
+      `;
+      return;
+    }
 
     this.drives.forEach(drive => {
       const isUsb = drive.isRemovable;
