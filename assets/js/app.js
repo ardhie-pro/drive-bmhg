@@ -336,8 +336,9 @@ class DriveApp {
   }
 
   renderDriveList() {
+    if (!this.el.driveList) return;
     this.el.driveList.innerHTML = '';
-    this.el.driveCountBadge.textContent = `${this.drives.length} Terhubung`;
+    if (this.el.driveCountBadge) this.el.driveCountBadge.textContent = `${this.drives.length} Terhubung`;
 
     if (this.drives.length === 0) {
       this.el.driveList.innerHTML = `
@@ -454,6 +455,7 @@ class DriveApp {
   }
 
   updateBreadcrumbs() {
+    if (!this.el.breadcrumbs) return;
     this.el.breadcrumbs.innerHTML = '';
     const cleanPath = this.currentPath.replace(/[/\\]+/g, '\\');
     const parts = cleanPath.split('\\').filter(p => p.length > 0);
@@ -488,36 +490,36 @@ class DriveApp {
 
   updateMetaHeader(data) {
     const folderName = this.currentPath.replace(/[/\\]$/, '').split(/[/\\]/).pop() || this.currentPath;
-    this.el.folderTitle.textContent = folderName;
-    this.el.folderStats.textContent = `${data.totalItems} item (${data.folderSizeFormatted}) • Sisa Drive: ${data.driveFreeFormatted}`;
-    this.el.btnNavUp.disabled = !this.parentPath;
+    if (this.el.folderTitle) this.el.folderTitle.textContent = folderName;
+    if (this.el.folderStats) this.el.folderStats.textContent = `${data.totalItems || 0} item (${data.folderSizeFormatted || '0 B'}) • Sisa Drive: ${data.driveFreeFormatted || '-'}`;
+    if (this.el.btnNavUp) this.el.btnNavUp.disabled = !this.parentPath;
   }
 
   renderItems() {
     if (this.filteredItems.length === 0) {
-      this.el.emptyState.style.display = 'flex';
-      this.el.fileGrid.style.display = 'none';
+      if (this.el.emptyState) this.el.emptyState.style.display = 'flex';
+      if (this.el.fileGrid) this.el.fileGrid.style.display = 'none';
       if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
-      this.el.fileListTable.style.display = 'none';
+      if (this.el.fileListTable) this.el.fileListTable.style.display = 'none';
       return;
     }
 
-    this.el.emptyState.style.display = 'none';
+    if (this.el.emptyState) this.el.emptyState.style.display = 'none';
 
     if (this.viewMode === 'gallery') {
-      this.el.fileGrid.style.display = 'none';
+      if (this.el.fileGrid) this.el.fileGrid.style.display = 'none';
       if (this.el.fileGallery) this.el.fileGallery.style.display = 'grid';
-      this.el.fileListTable.style.display = 'none';
+      if (this.el.fileListTable) this.el.fileListTable.style.display = 'none';
       this.renderGalleryView();
     } else if (this.viewMode === 'list') {
-      this.el.fileGrid.style.display = 'none';
+      if (this.el.fileGrid) this.el.fileGrid.style.display = 'none';
       if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
-      this.el.fileListTable.style.display = 'table';
+      if (this.el.fileListTable) this.el.fileListTable.style.display = 'table';
       this.renderListView();
     } else {
-      this.el.fileGrid.style.display = 'grid';
+      if (this.el.fileGrid) this.el.fileGrid.style.display = 'grid';
       if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
-      this.el.fileListTable.style.display = 'none';
+      if (this.el.fileListTable) this.el.fileListTable.style.display = 'none';
       this.renderGridView();
     }
   }
