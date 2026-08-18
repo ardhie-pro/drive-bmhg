@@ -18,6 +18,7 @@ class DriveApp {
     this.historyIndex = -1;
     this.dirCache = new Map();
     this.imageObserver = null;
+    this.selectedPaths = new Set();
 
     this.initImageObserver();
     this.initElements();
@@ -77,6 +78,7 @@ class DriveApp {
       emptyState: document.getElementById('emptyState'),
       searchInput: document.getElementById('searchInput'),
       btnUploadFile: document.getElementById('btnUploadFile'),
+      btnUploadFolder: document.getElementById('btnUploadFolder'),
       btnNewFolder: document.getElementById('btnNewFolder'),
       btnDownloadZip: document.getElementById('btnDownloadZip'),
       btnRefreshFolder: document.getElementById('btnRefreshFolder'),
@@ -87,11 +89,22 @@ class DriveApp {
       btnNavForward: document.getElementById('btnNavForward'),
       btnNavUp: document.getElementById('btnNavUp'),
       fileInput: document.getElementById('fileInput'),
+      folderInput: document.getElementById('folderInput'),
       dropOverlay: document.getElementById('dropOverlay'),
       uploadDrawer: document.getElementById('uploadDrawer'),
       uploadQueueList: document.getElementById('uploadQueueList'),
       btnCloseUploadDrawer: document.getElementById('btnCloseUploadDrawer'),
       toastContainer: document.getElementById('toastContainer'),
+
+      // Bulk Action Elements
+      bulkActionBar: document.getElementById('bulkActionBar'),
+      bulkCount: document.getElementById('bulkCount'),
+      btnSelectAll: document.getElementById('btnSelectAll'),
+      btnBulkDownload: document.getElementById('btnBulkDownload'),
+      btnBulkCompress: document.getElementById('btnBulkCompress'),
+      btnBulkDelete: document.getElementById('btnBulkDelete'),
+      btnDeselectAll: document.getElementById('btnDeselectAll'),
+      selectAllCheckbox: document.getElementById('selectAllCheckbox'),
 
       // Modals
       newFolderModal: document.getElementById('newFolderModal'),
@@ -148,14 +161,38 @@ class DriveApp {
     this.el.btnViewGallery?.addEventListener('click', () => this.setViewMode('gallery'));
     this.el.btnViewList?.addEventListener('click', () => this.setViewMode('list'));
 
-    // Upload button
-    this.el.btnUploadFile?.addEventListener('click', () => this.el.fileInput.click());
+    // Upload File button
+    this.el.btnUploadFile?.addEventListener('click', () => this.el.fileInput?.click());
     this.el.fileInput?.addEventListener('change', (e) => {
       if (e.target.files && e.target.files.length > 0) {
         this.handleFilesUpload(Array.from(e.target.files));
         this.el.fileInput.value = '';
       }
     });
+
+    // Upload Folder button
+    this.el.btnUploadFolder?.addEventListener('click', () => this.el.folderInput?.click());
+    this.el.folderInput?.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        const entries = Array.from(e.target.files).map(f => ({
+          file: f,
+          relativePath: f.webkitRelativePath || f.name
+        }));
+        this.handleFilesUpload(entries);
+        this.el.folderInput.value = '';
+      }
+    });
+
+    // Bulk Action Events
+    this.el.btnSelectAll?.addEventListener('click', () => this.selectAllItems());
+    this.el.selectAllCheckbox?.addEventListener('change', (e) => {
+      if (e.target.checked) this.selectAllItems();
+      else this.deselectAllItems();
+    });
+    this.el.btnDeselectAll?.addEventListener('click', () => this.deselectAllItems());
+    this.el.btnBulkDownload?.addEventListener('click', () => this.downloadBulk());
+    this.el.btnBulkCompress?.addEventListener('click', () => this.compressBulk());
+    this.el.btnBulkDelete?.addEventListener('click', () => this.deleteBulk());
 
     // New Folder
     this.el.btnNewFolder?.addEventListener('click', () => this.openNewFolderModal());
@@ -195,7 +232,7 @@ class DriveApp {
       this.el.uploadDrawer.classList.remove('show');
     });
 
-    // Drag & drop on window
+    // Drag & drop on window with recursive folder extraction
     window.addEventListener('dragover', (e) => {
       e.preventDefault();
       this.el.dropOverlay.classList.add('active');
@@ -206,11 +243,14 @@ class DriveApp {
       this.el.dropOverlay.classList.remove('active');
     });
 
-    window.addEventListener('drop', (e) => {
+    window.addEventListener('drop', async (e) => {
       e.preventDefault();
       this.el.dropOverlay.classList.remove('active');
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        this.handleFilesUpload(Array.from(e.dataTransfer.files));
+      if (e.dataTransfer) {
+        const entries = await this.parseDropItems(e.dataTransfer);
+        if (entries && entries.length > 0) {
+          this.handleFilesUpload(entries);
+        }
       }
     });
 
@@ -523,12 +563,16 @@ class DriveApp {
       const type = this.getFileTypeCategory(item);
       const isImage = type === 'image';
       const isArchive = type === 'archive';
+      const isSelected = this.selectedPaths.has(item.path);
       const thumbUrl = `api.php?action=thumb&path=${encodeURIComponent(item.path)}`;
 
       const card = document.createElement('div');
-      card.className = `file-card ${item.isDir ? 'is-dir' : `type-${type}`}`;
+      card.className = `file-card ${item.isDir ? 'is-dir' : `type-${type}`} ${isSelected ? 'selected' : ''}`;
 
       card.innerHTML = `
+        <div class="file-card-checkbox-wrap">
+          <input type="checkbox" class="file-select-checkbox" ${isSelected ? 'checked' : ''}>
+        </div>
         <div class="file-actions-hover">
           ${!item.isDir ? `<button class="btn-action-icon preview-btn" title="Lihat Preview"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>` : ''}
           ${isArchive ? `<button class="btn-action-icon extract-btn" title="Ekstrak Arsip (ZIP/RAR)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><polyline points="10 12 15 12 15 7"/><line x1="15" y1="12" x2="9" y2="18"/></svg></button>` : ''}
@@ -544,8 +588,20 @@ class DriveApp {
         <div class="file-details">${item.isDir ? 'Folder' : item.sizeFormatted}</div>
       `;
 
+      // Checkbox event
+      const chk = card.querySelector('.file-select-checkbox');
+      chk?.addEventListener('change', (e) => {
+        e.stopPropagation();
+        this.toggleSelect(item.path, e.target.checked);
+      });
+      chk?.addEventListener('click', (e) => e.stopPropagation());
+
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.file-actions-hover')) return;
+        if (e.target.closest('.file-actions-hover') || e.target.closest('.file-card-checkbox-wrap')) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+          this.toggleSelect(item.path);
+          return;
+        }
         if (item.isDir) {
           this.navigate(item.path);
         } else {
@@ -575,12 +631,16 @@ class DriveApp {
       const type = this.getFileTypeCategory(item);
       const isImage = type === 'image';
       const isArchive = type === 'archive';
+      const isSelected = this.selectedPaths.has(item.path);
       const thumbUrl = `api.php?action=thumb&path=${encodeURIComponent(item.path)}`;
 
       const card = document.createElement('div');
-      card.className = `gallery-card ${item.isDir ? 'is-dir' : `type-${type}`}`;
+      card.className = `gallery-card ${item.isDir ? 'is-dir' : `type-${type}`} ${isSelected ? 'selected' : ''}`;
 
       card.innerHTML = `
+        <div class="file-card-checkbox-wrap">
+          <input type="checkbox" class="file-select-checkbox" ${isSelected ? 'checked' : ''}>
+        </div>
         <div class="gallery-thumb">
           ${isImage ? `
             <img data-src="${thumbUrl}" class="gallery-img" decoding="async" alt="${item.name}" onerror="this.outerHTML='<div class=\\'gallery-icon-wrap\\'>${this.getFileIconSvg('image', false)}</div>'">
@@ -608,8 +668,19 @@ class DriveApp {
         </div>
       `;
 
+      const chk = card.querySelector('.file-select-checkbox');
+      chk?.addEventListener('change', (e) => {
+        e.stopPropagation();
+        this.toggleSelect(item.path, e.target.checked);
+      });
+      chk?.addEventListener('click', (e) => e.stopPropagation());
+
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.gallery-actions-hover')) return;
+        if (e.target.closest('.gallery-actions-hover') || e.target.closest('.file-card-checkbox-wrap')) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+          this.toggleSelect(item.path);
+          return;
+        }
         if (item.isDir) {
           this.navigate(item.path);
         } else {
@@ -635,9 +706,14 @@ class DriveApp {
     this.filteredItems.forEach(item => {
       const type = this.getFileTypeCategory(item);
       const isArchive = type === 'archive';
+      const isSelected = this.selectedPaths.has(item.path);
       const tr = document.createElement('tr');
+      if (isSelected) tr.className = 'selected';
 
       tr.innerHTML = `
+        <td style="text-align:center;">
+          <input type="checkbox" class="file-select-checkbox" ${isSelected ? 'checked' : ''}>
+        </td>
         <td>
           <div class="file-list-name-col">
             <div class="file-list-icon ${item.isDir ? 'is-dir' : `type-${type}`}">
@@ -660,8 +736,19 @@ class DriveApp {
         </td>
       `;
 
+      const chk = tr.querySelector('.file-select-checkbox');
+      chk?.addEventListener('change', (e) => {
+        e.stopPropagation();
+        this.toggleSelect(item.path, e.target.checked);
+      });
+      chk?.addEventListener('click', (e) => e.stopPropagation());
+
       tr.addEventListener('click', (e) => {
-        if (e.target.closest('.btn-action-icon')) return;
+        if (e.target.closest('.btn-action-icon') || e.target.closest('.file-select-checkbox')) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+          this.toggleSelect(item.path);
+          return;
+        }
         if (item.isDir) {
           this.navigate(item.path);
         } else {
@@ -709,20 +796,205 @@ class DriveApp {
     window.location.href = url;
   }
 
-  /* Chunked File Upload Engine */
+  /* Multi-Select & Bulk Operations */
+  toggleSelect(path, isSelected) {
+    if (isSelected === undefined) {
+      isSelected = !this.selectedPaths.has(path);
+    }
+
+    if (isSelected) {
+      this.selectedPaths.add(path);
+    } else {
+      this.selectedPaths.delete(path);
+    }
+
+    this.updateBulkActionBar();
+    this.syncSelectionUI();
+  }
+
+  selectAllItems() {
+    this.filteredItems.forEach(item => this.selectedPaths.add(item.path));
+    this.updateBulkActionBar();
+    this.syncSelectionUI();
+  }
+
+  deselectAllItems() {
+    this.selectedPaths.clear();
+    this.updateBulkActionBar();
+    this.syncSelectionUI();
+  }
+
+  syncSelectionUI() {
+    // Sync Grid & Gallery cards
+    document.querySelectorAll('.file-card, .gallery-card').forEach(card => {
+      const path = card.querySelector('.file-actions-hover .download-btn')?.dataset?.path;
+      // We can also find by checkbox
+    });
+
+    // Re-render quickly or toggle classes
+    this.renderItems();
+  }
+
+  updateBulkActionBar() {
+    const count = this.selectedPaths.size;
+    if (this.el.bulkActionBar) {
+      if (count > 0) {
+        this.el.bulkActionBar.classList.add('show');
+        if (this.el.bulkCount) this.el.bulkCount.textContent = count;
+      } else {
+        this.el.bulkActionBar.classList.remove('show');
+      }
+    }
+
+    if (this.el.selectAllCheckbox) {
+      this.el.selectAllCheckbox.checked = (count > 0 && count === this.filteredItems.length);
+      this.el.selectAllCheckbox.indeterminate = (count > 0 && count < this.filteredItems.length);
+    }
+  }
+
+  downloadBulk() {
+    const paths = Array.from(this.selectedPaths);
+    if (paths.length === 0) return;
+
+    this.showToast(`Menyiapkan ${paths.length} item untuk diunduh sebagai ZIP...`, 'info');
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'api.php?action=download_bulk';
+    form.target = '_blank';
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'paths';
+    input.value = JSON.stringify(paths);
+    form.appendChild(input);
+
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(() => form.remove(), 2000);
+  }
+
+  async compressBulk() {
+    const paths = Array.from(this.selectedPaths);
+    if (paths.length === 0) return;
+
+    const defaultName = `arsip_${paths.length}_item_${new Date().toISOString().slice(0, 10)}.zip`;
+    const zipName = prompt('Masukkan nama file ZIP hasil kompresi:', defaultName);
+    if (!zipName) return;
+
+    this.showToast(`Mengompres ${paths.length} item ke ZIP...`, 'info');
+    const formData = new FormData();
+    formData.append('action', 'compress_bulk');
+    formData.append('zipName', zipName);
+    formData.append('paths', JSON.stringify(paths));
+
+    try {
+      const res = await fetch('api.php', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast(data.message || 'Berhasil mengompres item terpilih.', 'success');
+        this.deselectAllItems();
+        this.loadDirectory(this.currentPath);
+      } else {
+        this.showToast(data.message || 'Gagal mengompres item.', 'error');
+      }
+    } catch (e) {
+      this.showToast('Gagal koneksi saat kompresi: ' + e.message, 'error');
+    }
+  }
+
+  async deleteBulk() {
+    const paths = Array.from(this.selectedPaths);
+    if (paths.length === 0) return;
+
+    const ok = confirm(`Apakah Anda yakin ingin menghapus ${paths.length} item yang dipilih secara permanen?`);
+    if (!ok) return;
+
+    this.showToast(`Menghapus ${paths.length} item terpilih...`, 'info');
+    const formData = new FormData();
+    formData.append('action', 'delete_bulk');
+    formData.append('paths', JSON.stringify(paths));
+
+    try {
+      const res = await fetch('api.php', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast(data.message || 'Item terpilih berhasil dihapus.', 'success');
+        this.deselectAllItems();
+        this.loadDirectory(this.currentPath);
+      } else {
+        this.showToast(data.message || 'Gagal menghapus item.', 'error');
+      }
+    } catch (e) {
+      this.showToast('Gagal koneksi saat menghapus: ' + e.message, 'error');
+    }
+  }
+
+  /* Recursive Drag & Drop Folder Parser */
+  async parseDropItems(dataTransfer) {
+    const items = dataTransfer.items;
+    const fileEntries = [];
+
+    if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+      const queue = [];
+      for (let i = 0; i < items.length; i++) {
+        const entry = items[i].webkitGetAsEntry();
+        if (entry) queue.push(entry);
+      }
+
+      while (queue.length > 0) {
+        const entry = queue.shift();
+        if (entry.isFile) {
+          try {
+            const file = await new Promise((res, rej) => entry.file(res, rej));
+            const relPath = entry.fullPath ? entry.fullPath.replace(/^\//, '') : file.name;
+            fileEntries.push({ file, relativePath: relPath });
+          } catch (e) {}
+        } else if (entry.isDirectory) {
+          try {
+            const dirReader = entry.createReader();
+            const childEntries = await this.readAllDirectoryEntries(dirReader);
+            for (const child of childEntries) {
+              queue.push(child);
+            }
+          } catch (e) {}
+        }
+      }
+    } else if (dataTransfer.files) {
+      for (let i = 0; i < dataTransfer.files.length; i++) {
+        const file = dataTransfer.files[i];
+        fileEntries.push({ file, relativePath: file.name });
+      }
+    }
+
+    return fileEntries;
+  }
+
+  async readAllDirectoryEntries(dirReader) {
+    const entries = [];
+    let readBatch = await new Promise((res, rej) => dirReader.readEntries(res, rej));
+    while (readBatch && readBatch.length > 0) {
+      entries.push(...readBatch);
+      readBatch = await new Promise((res, rej) => dirReader.readEntries(res, rej));
+    }
+    return entries;
+  }
+
+  /* Chunked File & Folder Upload Engine */
   async handleFilesUpload(files) {
     if (!files || files.length === 0) return;
 
     this.el.uploadDrawer.classList.add('show');
 
-    for (const file of files) {
-      await this.uploadSingleFileChunked(file);
+    for (const item of files) {
+      await this.uploadSingleFileChunked(item);
     }
 
     this.loadDirectory(this.currentPath);
   }
 
-  async uploadSingleFileChunked(file) {
+  async uploadSingleFileChunked(item) {
+    const file = item.file || item;
+    const relativePath = item.relativePath || file.name;
     const uploadId = 'upl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
     const chunkSize = 2 * 1024 * 1024; // 2MB chunk
     const totalChunks = Math.ceil(file.size / chunkSize);
@@ -732,7 +1004,7 @@ class DriveApp {
     itemEl.id = uploadId;
     itemEl.innerHTML = `
       <div class="upload-item-header">
-        <span class="upload-item-name" title="${file.name}">${file.name}</span>
+        <span class="upload-item-name" title="${relativePath}">${relativePath}</span>
         <span class="upload-item-pct">0%</span>
       </div>
       <div class="upload-progress-bg">
@@ -753,6 +1025,7 @@ class DriveApp {
       formData.append('action', 'upload_chunk');
       formData.append('targetDir', this.currentPath);
       formData.append('fileName', file.name);
+      formData.append('relativePath', relativePath);
       formData.append('chunkIndex', chunkIndex);
       formData.append('totalChunks', totalChunks);
       formData.append('uploadId', uploadId);
@@ -768,7 +1041,7 @@ class DriveApp {
         if (!result.success) {
           pct.textContent = 'Gagal';
           pct.style.color = 'var(--accent-rose)';
-          this.showToast(`Upload gagal: ${file.name} (${result.message})`, 'error');
+          this.showToast(`Upload gagal: ${relativePath} (${result.message})`, 'error');
           return;
         }
 
@@ -778,14 +1051,14 @@ class DriveApp {
       } catch (err) {
         pct.textContent = 'Error';
         pct.style.color = 'var(--accent-rose)';
-        this.showToast(`Gagal koneksi saat upload ${file.name}`, 'error');
+        this.showToast(`Gagal koneksi saat upload ${relativePath}`, 'error');
         return;
       }
     }
 
     pct.textContent = 'Selesai';
     pct.style.color = 'var(--accent-emerald)';
-    this.showToast(`Berhasil mengunggah ${file.name}`, 'success');
+    this.showToast(`Berhasil mengunggah ${relativePath}`, 'success');
   }
 
   /* File Operations */

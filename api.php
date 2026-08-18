@@ -610,6 +610,7 @@ try {
         case 'upload_chunk':
             $targetDir = normalizePath($_POST['targetDir'] ?? '');
             $fileName = trim($_POST['fileName'] ?? '');
+            $relativePath = trim($_POST['relativePath'] ?? '');
             $chunkIndex = (int)($_POST['chunkIndex'] ?? 0);
             $totalChunks = (int)($_POST['totalChunks'] ?? 1);
             $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', $_POST['uploadId'] ?? uniqid('upl_', true));
@@ -618,7 +619,7 @@ try {
                 sendJson(['success' => false, 'message' => 'Akses ke drive ini diblokir pada konfigurasi keamanan.'], 403);
             }
 
-            if (empty($targetDir) || !is_dir($targetDir) || empty($fileName)) {
+            if (empty($targetDir) || !is_dir($targetDir) || (empty($fileName) && empty($relativePath))) {
                 sendJson(['success' => false, 'message' => 'Target direktori tidak valid.'], 400);
             }
 
@@ -646,10 +647,22 @@ try {
             }
 
             if ($isComplete) {
-                $cleanFileName = preg_replace('/[\\/\\\\:\*\?"<>\|]/', '', $fileName);
-                $finalDestination = rtrim($targetDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $cleanFileName;
+                if (!empty($relativePath)) {
+                    // Sanitasi relative path untuk mencegah zip slip / path traversal
+                    $cleanRel = str_replace(['..', "\0"], '', $relativePath);
+                    $cleanRel = ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $cleanRel), DIRECTORY_SEPARATOR);
+                    $finalDestination = rtrim($targetDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $cleanRel;
+                } else {
+                    $cleanFileName = preg_replace('/[\\/\\\\:\*\?"<>\|]/', '', $fileName);
+                    $finalDestination = rtrim($targetDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $cleanFileName;
+                }
 
-                if (file_exists($finalDestination)) {
+                $parentDest = dirname($finalDestination);
+                if (!is_dir($parentDest)) {
+                    @mkdir($parentDest, 0777, true);
+                }
+
+                if (file_exists($finalDestination) && empty($relativePath)) {
                     $info = pathinfo($cleanFileName);
                     $namePart = $info['filename'];
                     $extPart = isset($info['extension']) ? '.' . $info['extension'] : '';
@@ -690,6 +703,179 @@ try {
                     'message' => "Potongan {$chunkIndex} berhasil diunggah."
                 ]);
             }
+            break;
+
+        case 'download_bulk':
+            $pathsJson = $_REQUEST['paths'] ?? '';
+            $paths = is_array($pathsJson) ? $pathsJson : @json_decode($pathsJson, true);
+            if (!is_array($paths) || empty($paths)) {
+                http_response_code(400);
+                die('Daftar file yang dipilih tidak valid.');
+            }
+
+            if (!class_exists('ZipArchive')) {
+                http_response_code(500);
+                die('PHP ZipArchive tidak aktif pada server.');
+            }
+
+            $validPaths = [];
+            foreach ($paths as $p) {
+                $norm = normalizePath($p);
+                if (!isPathExcluded($norm, $excludedDrives) && file_exists($norm)) {
+                    $validPaths[] = $norm;
+                }
+            }
+
+            if (empty($validPaths)) {
+                http_response_code(404);
+                die('Tidak ada file valid yang dapat diunduh.');
+            }
+
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                session_write_close();
+            }
+
+            while (ob_get_level()) {
+                ob_end_clean();
+            }
+
+            $tempZip = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'bulk_download_' . uniqid('', true) . '.zip';
+            $zip = new ZipArchive();
+            if ($zip->open($tempZip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                http_response_code(500);
+                die('Gagal membuat arsip ZIP sementara.');
+            }
+
+            foreach ($validPaths as $filePath) {
+                $base = basename($filePath);
+                if (is_dir($filePath)) {
+                    $files = new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator($filePath, RecursiveDirectoryIterator::SKIP_DOTS),
+                        RecursiveIteratorIterator::SELF_FIRST
+                    );
+                    foreach ($files as $file) {
+                        $subRelative = $base . DIRECTORY_SEPARATOR . substr($file->getPathname(), strlen($filePath) + 1);
+                        if ($file->isDir()) {
+                            $zip->addEmptyDir(str_replace('\\', '/', $subRelative));
+                        } elseif ($file->isFile()) {
+                            $zip->addFile($file->getPathname(), str_replace('\\', '/', $subRelative));
+                        }
+                    }
+                } else {
+                    $zip->addFile($filePath, $base);
+                }
+            }
+
+            $zip->close();
+
+            if (!file_exists($tempZip) || filesize($tempZip) === 0) {
+                http_response_code(500);
+                die('Gagal memproses arsip ZIP.');
+            }
+
+            header('Content-Type: application/zip');
+            header('Content-Disposition: attachment; filename="unduhan_terpilih_' . date('Ymd_His') . '.zip"');
+            header('Content-Length: ' . filesize($tempZip));
+            header('Cache-Control: no-cache, no-store, must-revalidate');
+
+            readfile($tempZip);
+            @unlink($tempZip);
+            exit;
+
+        case 'delete_bulk':
+            $pathsJson = $_POST['paths'] ?? '';
+            $paths = is_array($pathsJson) ? $pathsJson : @json_decode($pathsJson, true);
+            if (!is_array($paths) || empty($paths)) {
+                sendJson(['success' => false, 'message' => 'Daftar item tidak valid.'], 400);
+            }
+
+            $deletedCount = 0;
+            $failedCount = 0;
+            foreach ($paths as $p) {
+                $targetPath = normalizePath($p);
+                if (isPathExcluded($targetPath, $excludedDrives) || preg_match('/^[A-Za-z]:\\\\?$/', $targetPath)) {
+                    $failedCount++;
+                    continue;
+                }
+                if (file_exists($targetPath)) {
+                    if (deleteRecursive($targetPath)) {
+                        $deletedCount++;
+                    } else {
+                        $failedCount++;
+                    }
+                }
+            }
+
+            sendJson([
+                'success' => true,
+                'deletedCount' => $deletedCount,
+                'failedCount' => $failedCount,
+                'message' => "{$deletedCount} item berhasil dihapus" . ($failedCount > 0 ? " ({$failedCount} gagal)" : ".")
+            ]);
+            break;
+
+        case 'compress_bulk':
+            $pathsJson = $_POST['paths'] ?? '';
+            $customName = trim($_POST['zipName'] ?? '');
+            $paths = is_array($pathsJson) ? $pathsJson : @json_decode($pathsJson, true);
+            if (!is_array($paths) || empty($paths)) {
+                sendJson(['success' => false, 'message' => 'Daftar item tidak valid.'], 400);
+            }
+
+            if (!class_exists('ZipArchive')) {
+                sendJson(['success' => false, 'message' => 'PHP ZipArchive tidak aktif pada server.'], 500);
+            }
+
+            $validPaths = [];
+            foreach ($paths as $p) {
+                $norm = normalizePath($p);
+                if (!isPathExcluded($norm, $excludedDrives) && file_exists($norm)) {
+                    $validPaths[] = $norm;
+                }
+            }
+
+            if (empty($validPaths)) {
+                sendJson(['success' => false, 'message' => 'Tidak ada file valid untuk dikompres.'], 404);
+            }
+
+            $firstDir = is_dir($validPaths[0]) ? dirname(rtrim($validPaths[0], DIRECTORY_SEPARATOR)) : dirname($validPaths[0]);
+            if (empty($firstDir) || preg_match('/^[A-Za-z]:$/', $firstDir)) {
+                $firstDir .= DIRECTORY_SEPARATOR;
+            }
+
+            $sanitized = !empty($customName) ? preg_replace('/[\\/\\\\:\*\?"<>\|]/', '', $customName) : 'arsip_terpilih_' . date('Ymd_His');
+            if (!str_ends_with(strtolower($sanitized), '.zip')) {
+                $sanitized .= '.zip';
+            }
+
+            $zipFile = rtrim($firstDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $sanitized;
+            $zip = new ZipArchive();
+            if ($zip->open($zipFile, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                sendJson(['success' => false, 'message' => 'Gagal membuat file ZIP di direktori tujuan.'], 500);
+            }
+
+            foreach ($validPaths as $filePath) {
+                $base = basename($filePath);
+                if (is_dir($filePath)) {
+                    $files = new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator($filePath, RecursiveDirectoryIterator::SKIP_DOTS),
+                        RecursiveIteratorIterator::SELF_FIRST
+                    );
+                    foreach ($files as $file) {
+                        $subRelative = $base . DIRECTORY_SEPARATOR . substr($file->getPathname(), strlen($filePath) + 1);
+                        if ($file->isDir()) {
+                            $zip->addEmptyDir(str_replace('\\', '/', $subRelative));
+                        } elseif ($file->isFile()) {
+                            $zip->addFile($file->getPathname(), str_replace('\\', '/', $subRelative));
+                        }
+                    }
+                } else {
+                    $zip->addFile($filePath, $base);
+                }
+            }
+
+            $zip->close();
+            sendJson(['success' => true, 'message' => "Berhasil mengompres {$sanitized}.", 'zipPath' => $zipFile]);
             break;
 
         case 'download':
