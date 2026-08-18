@@ -367,6 +367,10 @@ function getSystemDrives(array $excludedDrives = []): array {
         }
     }
 
+    if (!empty($drives)) {
+        @file_put_contents($cacheFile, json_encode($drives));
+    }
+
     return $drives;
 }
 
@@ -382,7 +386,29 @@ try {
             $reqPath = $_GET['path'] ?? '';
             if (empty($reqPath)) {
                 $availableDrives = getSystemDrives($excludedDrives);
-                $reqPath = !empty($availableDrives) ? $availableDrives[0]['path'] : 'D:\\';
+                if (!empty($availableDrives)) {
+                    $usb = null;
+                    foreach ($availableDrives as $d) {
+                        if (!empty($d['isRemovable'])) { $usb = $d; break; }
+                    }
+                    $reqPath = $usb ? $usb['path'] : $availableDrives[0]['path'];
+                } else {
+                    $reqPath = '';
+                }
+            }
+
+            if (empty($reqPath)) {
+                sendJson([
+                    'success' => true,
+                    'currentPath' => '',
+                    'parentPath' => null,
+                    'items' => [],
+                    'totalItems' => 0,
+                    'folderSizeFormatted' => '0 B',
+                    'driveFreeFormatted' => '0 B',
+                    'driveTotalFormatted' => '0 B',
+                    'message' => 'Belum ada drive atau flashdisk yang dapat diakses.'
+                ]);
             }
 
             $path = normalizePath($reqPath);
@@ -392,7 +418,7 @@ try {
             }
 
             if (!is_dir($path)) {
-                sendJson(['success' => false, 'message' => 'Direktori tidak ditemukan atau tidak dapat diakses.'], 404);
+                sendJson(['success' => false, 'message' => 'Direktori ' . htmlspecialchars($path) . ' tidak ditemukan atau tidak dapat diakses.'], 404);
             }
 
             // Dapatkan info parent directory
