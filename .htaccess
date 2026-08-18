@@ -1,0 +1,8 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /drive/
+
+    # Forward /sso-login to sso-login.php
+    RewriteRule ^sso-login$ sso-login.php [L,QSA]
+    RewriteRule ^sso-login/$ sso-login.php [L,QSA]
+</IfModule>
