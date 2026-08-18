@@ -533,6 +533,11 @@ try {
                 die('File atau folder tidak ditemukan.');
             }
 
+            // Lepaskan lock session agar tidak memblokir request lain
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                session_write_close();
+            }
+
             // Jika folder, kompres menjadi file ZIP secara on-the-fly
             if (is_dir($targetPath)) {
                 $folderName = basename(rtrim($targetPath, DIRECTORY_SEPARATOR));
@@ -569,6 +574,10 @@ try {
                 }
                 $zip->close();
 
+                while (ob_get_level()) {
+                    ob_end_clean();
+                }
+
                 header('Content-Type: application/zip');
                 header('Content-Disposition: attachment; filename="' . $zipFileName . '"');
                 header('Content-Length: ' . filesize($tempZipPath));
@@ -586,6 +595,10 @@ try {
             $fileSize = (float)filesize($targetPath);
             $mimeType = getMimeType($targetPath);
 
+            while (ob_get_level()) {
+                ob_end_clean();
+            }
+
             header('Content-Type: ' . $mimeType);
             header('Content-Disposition: attachment; filename="' . rawurlencode($fileName) . '"');
             header('Content-Length: ' . $fileSize);
@@ -593,7 +606,6 @@ try {
             header('Pragma: public');
             header('Expires: 0');
 
-            // Streaming file dalam chunks 2MB
             $fp = @fopen($targetPath, 'rb');
             if ($fp) {
                 while (!feof($fp)) {
@@ -617,44 +629,238 @@ try {
                 die('File tidak ditemukan.');
             }
 
+            // Lepaskan lock session agar streaming video concurrent lancar
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                session_write_close();
+            }
+
+            // Bersihkan semua output buffer PHP
+            while (ob_get_level()) {
+                ob_end_clean();
+            }
+
             $mimeType = getMimeType($targetPath);
             $fileSize = (float)filesize($targetPath);
 
             header('Content-Type: ' . $mimeType);
-            header('Content-Length: ' . $fileSize);
-            header('Content-Disposition: inline; filename="' . rawurlencode(basename($targetPath)) . '"');
             header('Accept-Ranges: bytes');
+            header('Content-Disposition: inline; filename="' . rawurlencode(basename($targetPath)) . '"');
+            header('Cache-Control: public, max-age=3600');
 
-            // Support Range Requests untuk Video & Audio streaming
+            // Support Range Requests untuk Video & Audio playback
             if (isset($_SERVER['HTTP_RANGE'])) {
-                list($param, $range) = explode('=', $_SERVER['HTTP_RANGE'], 2);
-                if (strtolower(trim($param)) === 'bytes') {
-                    list($from, $to) = explode('-', $range, 2);
-                    $from = (int)$from;
-                    $to = (int)($to ?: $fileSize - 1);
-                    if ($to >= $fileSize) $to = (int)($fileSize - 1);
-                    $length = $to - $from + 1;
+                $range = $_SERVER['HTTP_RANGE'];
+                if (preg_match('/bytes=\s*(\d+)?\s*-\s*(\d+)?/i', $range, $matches)) {
+                    $start = !empty($matches[1]) ? (float)$matches[1] : 0;
+                    $end = !empty($matches[2]) ? (float)$matches[2] : ($fileSize - 1);
+
+                    if (empty($matches[1]) && !empty($matches[2])) {
+                        // Range format: bytes=-500 (last 500 bytes)
+                        $start = max(0, $fileSize - (float)$matches[2]);
+                        $end = $fileSize - 1;
+                    }
+
+                    if ($start > $end || $start >= $fileSize) {
+                        http_response_code(416); // Requested Range Not Satisfiable
+                        header("Content-Range: bytes */$fileSize");
+                        exit;
+                    }
+
+                    $end = min($end, $fileSize - 1);
+                    $length = (int)($end - $start + 1);
 
                     http_response_code(206);
-                    header("Content-Range: bytes $from-$to/$fileSize");
+                    header("Content-Range: bytes $start-$end/$fileSize");
                     header("Content-Length: $length");
 
-                    $fp = fopen($targetPath, 'rb');
-                    fseek($fp, $from);
-                    $remaining = $length;
-                    while ($remaining > 0 && !feof($fp)) {
-                        $chunk = min($remaining, 1048576);
-                        echo fread($fp, $chunk);
-                        flush();
-                        $remaining -= $chunk;
+                    $fp = @fopen($targetPath, 'rb');
+                    if ($fp) {
+                        fseek($fp, (int)$start);
+                        $remaining = $length;
+                        while ($remaining > 0 && !feof($fp)) {
+                            $chunkSize = min($remaining, 1048576); // 1MB buffer
+                            $buffer = fread($fp, (int)$chunkSize);
+                            echo $buffer;
+                            flush();
+                            $remaining -= strlen($buffer);
+                        }
+                        fclose($fp);
                     }
-                    fclose($fp);
                     exit;
                 }
             }
 
-            readfile($targetPath);
+            header('Content-Length: ' . $fileSize);
+            $fp = @fopen($targetPath, 'rb');
+            if ($fp) {
+                while (!feof($fp)) {
+                    echo fread($fp, 2097152);
+                    flush();
+                }
+                fclose($fp);
+            }
             exit;
+
+        case 'compress_zip':
+            $targetPath = normalizePath($_POST['path'] ?? '');
+            $customName = trim($_POST['zipName'] ?? '');
+
+            if (isPathExcluded($targetPath, $excludedDrives)) {
+                sendJson(['success' => false, 'message' => 'Akses ke drive ini diblokir pada konfigurasi keamanan.'], 403);
+            }
+
+            if (empty($targetPath) || !file_exists($targetPath)) {
+                sendJson(['success' => false, 'message' => 'File atau folder yang akan dikompres tidak ditemukan.'], 404);
+            }
+
+            if (!class_exists('ZipArchive')) {
+                sendJson(['success' => false, 'message' => 'Ekstensi PHP ZipArchive tidak aktif pada server ini.'], 500);
+            }
+
+            $parentDir = is_dir($targetPath) ? dirname(rtrim($targetPath, DIRECTORY_SEPARATOR)) : dirname($targetPath);
+            if (empty($parentDir) || preg_match('/^[A-Za-z]:$/', $parentDir)) {
+                $parentDir .= DIRECTORY_SEPARATOR;
+            }
+
+            $baseName = basename(rtrim($targetPath, DIRECTORY_SEPARATOR));
+            if (!empty($customName)) {
+                $sanitized = preg_replace('/[\\/\\\\:\*\?"<>\|]/', '', $customName);
+                if (!str_ends_with(strtolower($sanitized), '.zip')) {
+                    $sanitized .= '.zip';
+                }
+                $zipFileName = $sanitized;
+            } else {
+                $zipFileName = pathinfo($baseName, PATHINFO_FILENAME) . '.zip';
+            }
+
+            $zipPath = rtrim($parentDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $zipFileName;
+
+            // Jika file zip sudah ada, tambahkan penomoran
+            if (file_exists($zipPath)) {
+                $rawName = pathinfo($zipFileName, PATHINFO_FILENAME);
+                $zipPath = rtrim($parentDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $rawName . '_' . date('Ymd_His') . '.zip';
+            }
+
+            $zip = new ZipArchive();
+            if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                sendJson(['success' => false, 'message' => 'Gagal membuat file arsip ZIP. Periksa izin tulis direktori.'], 500);
+            }
+
+            if (is_dir($targetPath)) {
+                $files = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator($targetPath, RecursiveDirectoryIterator::SKIP_DOTS),
+                    RecursiveIteratorIterator::SELF_FIRST
+                );
+
+                $rootPrefixLength = strlen(rtrim($targetPath, DIRECTORY_SEPARATOR)) + 1;
+                $folderName = basename(rtrim($targetPath, DIRECTORY_SEPARATOR));
+                $zip->addEmptyDir($folderName);
+
+                foreach ($files as $file) {
+                    $filePath = $file->getRealPath();
+                    $relativePath = $folderName . '/' . substr($filePath, $rootPrefixLength);
+                    $relativePath = str_replace('\\', '/', $relativePath);
+
+                    if ($file->isDir()) {
+                        $zip->addEmptyDir($relativePath);
+                    } elseif ($file->isFile()) {
+                        $zip->addFile($filePath, $relativePath);
+                    }
+                }
+            } else {
+                $zip->addFile($targetPath, basename($targetPath));
+            }
+
+            $zip->close();
+
+            sendJson([
+                'success' => true,
+                'message' => 'Berhasil membuat arsip ZIP: ' . basename($zipPath),
+                'zipPath' => $zipPath
+            ]);
+            break;
+
+        case 'extract_archive':
+            $targetPath = normalizePath($_POST['path'] ?? '');
+            $targetSubfolder = trim($_POST['targetFolder'] ?? '');
+
+            if (isPathExcluded($targetPath, $excludedDrives)) {
+                sendJson(['success' => false, 'message' => 'Akses ke drive ini diblokir pada konfigurasi keamanan.'], 403);
+            }
+
+            if (empty($targetPath) || !file_exists($targetPath) || is_dir($targetPath)) {
+                sendJson(['success' => false, 'message' => 'File arsip tidak ditemukan.'], 404);
+            }
+
+            $parentDir = dirname($targetPath);
+            if (empty($parentDir) || preg_match('/^[A-Za-z]:$/', $parentDir)) {
+                $parentDir .= DIRECTORY_SEPARATOR;
+            }
+
+            // Tentukan folder tujuan ekstraksi
+            $destDirName = !empty($targetSubfolder) ? preg_replace('/[\\/\\\\:\*\?"<>\|]/', '', $targetSubfolder) : pathinfo($targetPath, PATHINFO_FILENAME);
+            $extractDir = rtrim($parentDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $destDirName;
+
+            if (!is_dir($extractDir)) {
+                @mkdir($extractDir, 0777, true);
+            }
+
+            $ext = strtolower(pathinfo($targetPath, PATHINFO_EXTENSION));
+
+            if ($ext === 'zip') {
+                if (!class_exists('ZipArchive')) {
+                    sendJson(['success' => false, 'message' => 'Ekstensi PHP ZipArchive tidak aktif.'], 500);
+                }
+
+                $zip = new ZipArchive();
+                if ($zip->open($targetPath) === true) {
+                    // Validasi Zip-Slip keamanan sebelum extract
+                    for ($i = 0; $i < $zip->numFiles; $i++) {
+                        $filename = $zip->getNameIndex($i);
+                        if (str_contains($filename, '../') || str_contains($filename, '..\\')) {
+                            $zip->close();
+                            sendJson(['success' => false, 'message' => 'Arsip tidak valid atau mengandung path berbahaya (Zip-Slip).'], 400);
+                        }
+                    }
+
+                    $zip->extractTo($extractDir);
+                    $zip->close();
+
+                    sendJson([
+                        'success' => true,
+                        'message' => 'Arsip ZIP berhasil diekstrak ke folder: ' . basename($extractDir),
+                        'extractDir' => $extractDir
+                    ]);
+                } else {
+                    sendJson(['success' => false, 'message' => 'Gagal membuka atau mengekstrak file ZIP.'], 500);
+                }
+            } else {
+                // Ekstraksi untuk format .rar, .tar, .7z, .gz menggunakan utilitas sistem (tar/bsdtar di Windows 10/11)
+                $escapedTarget = escapeshellarg($targetPath);
+                $escapedDest = escapeshellarg($extractDir);
+                
+                // Gunakan bsdtar bawaan Windows yang mendukung zip, rar, tar, gz, 7z
+                $cmd = "tar -xf {$escapedTarget} -C {$escapedDest} 2>&1";
+                $output = @shell_exec($cmd);
+
+                // Cek apakah direktori tujuan berisi file hasil ekstrak
+                $extractedFiles = @scandir($extractDir);
+                $hasFiles = $extractedFiles && count($extractedFiles) > 2;
+
+                if ($hasFiles) {
+                    sendJson([
+                        'success' => true,
+                        'message' => 'Arsip berhasil diekstrak ke folder: ' . basename($extractDir),
+                        'extractDir' => $extractDir
+                    ]);
+                } else {
+                    sendJson([
+                        'success' => false,
+                        'message' => 'Gagal mengekstrak arsip ' . strtoupper($ext) . '. Pastikan file arsip tidak terproteksi password atau rusak.'
+                    ], 500);
+                }
+            }
+            break;
 
         case 'search':
             $basePath = normalizePath($_GET['path'] ?? '');

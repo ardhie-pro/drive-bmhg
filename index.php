@@ -150,7 +150,7 @@ $currentUser = $_SESSION['drive_user'] ?? [
 
           <!-- View Toggle -->
           <div class="view-toggle-group">
-            <button id="btnViewGrid" class="btn-view-toggle active" title="Grid View">
+            <button id="btnViewGrid" class="btn-view-toggle active" title="Grid View (Ikon Standar)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="3" width="7" height="7"/>
                 <rect x="14" y="3" width="7" height="7"/>
@@ -158,7 +158,14 @@ $currentUser = $_SESSION['drive_user'] ?? [
                 <rect x="3" y="14" width="7" height="7"/>
               </svg>
             </button>
-            <button id="btnViewList" class="btn-view-toggle" title="List View">
+            <button id="btnViewGallery" class="btn-view-toggle" title="Gallery / Thumbnail View (Kotak Preview Gambar)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+            </button>
+            <button id="btnViewList" class="btn-view-toggle" title="List View (Tabel Rinci)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="8" y1="6" x2="21" y2="6"/>
                 <line x1="8" y1="12" x2="21" y2="12"/>
@@ -214,6 +221,11 @@ $currentUser = $_SESSION['drive_user'] ?? [
 
           <!-- Grid View -->
           <div id="fileGrid" class="file-grid">
+            <!-- Injected via JS -->
+          </div>
+
+          <!-- Gallery / Thumbnail View (Kotak-kotak Preview Gambar & Media) -->
+          <div id="fileGallery" class="file-gallery" style="display:none;">
             <!-- Injected via JS -->
           </div>
 
@@ -342,6 +354,70 @@ $currentUser = $_SESSION['drive_user'] ?? [
       <div class="modal-footer">
         <button class="btn btn-secondary btn-close-modal">Batal</button>
         <button id="btnConfirmDelete" class="btn btn-danger">Hapus Permanen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Compress to ZIP -->
+  <div id="compressModal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">Kompres ke ZIP</div>
+        <button class="btn-icon-mini btn-close-modal">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="compressZipNameInput">Nama File ZIP</label>
+          <input type="text" id="compressZipNameInput" class="form-input" placeholder="arsip.zip">
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-muted);">
+          Item <strong id="compressItemName" style="color:var(--text-primary);"></strong> akan dikompresi ke format .ZIP di folder yang sama.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-close-modal">Batal</button>
+        <button id="btnConfirmCompress" class="btn btn-primary">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="21 8 21 21 3 21 3 8"/>
+            <rect x="1" y="3" width="22" height="5"/>
+            <line x1="10" y1="12" x2="14" y2="12"/>
+          </svg>
+          Kompres Sekarang
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Extract Archive -->
+  <div id="extractModal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">Ekstrak Arsip File</div>
+        <button class="btn-icon-mini btn-close-modal">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="extractFolderNameInput">Nama Folder Hasil Ekstraksi</label>
+          <input type="text" id="extractFolderNameInput" class="form-input" placeholder="nama_folder">
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-muted);">
+          Seluruh isi file arsip <strong id="extractItemName" style="color:var(--text-primary);"></strong> akan diekstrak ke folder tersebut.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-close-modal">Batal</button>
+        <button id="btnConfirmExtract" class="btn btn-primary">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="21 8 21 21 3 21 3 8"/>
+            <polyline points="10 12 15 12 15 7"/>
+            <line x1="15" y1="12" x2="9" y2="18"/>
+          </svg>
+          Ekstrak File
+        </button>
       </div>
     </div>
   </div>
