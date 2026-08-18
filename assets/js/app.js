@@ -16,11 +16,50 @@ class DriveApp {
     this.selectedItem = null;
     this.historyStack = [];
     this.historyIndex = -1;
+    this.dirCache = new Map();
+    this.imageObserver = null;
 
+    this.initImageObserver();
     this.initElements();
     this.initEventListeners();
     this.initDrivePolling();
     this.loadDrives(true);
+  }
+
+  initImageObserver() {
+    if ('IntersectionObserver' in window) {
+      this.imageObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const img = entry.target;
+            const src = img.getAttribute('data-src');
+            if (src) {
+              img.src = src;
+              img.removeAttribute('data-src');
+              img.onload = () => img.classList.add('loaded');
+            }
+            observer.unobserve(img);
+          }
+        });
+      }, {
+        rootMargin: '350px 0px',
+        threshold: 0.01
+      });
+    }
+  }
+
+  observeImages(container) {
+    if (!container) return;
+    const lazyImages = container.querySelectorAll('img[data-src]');
+    lazyImages.forEach(img => {
+      if (this.imageObserver) {
+        this.imageObserver.observe(img);
+      } else {
+        img.src = img.getAttribute('data-src');
+        img.removeAttribute('data-src');
+        img.onload = () => img.classList.add('loaded');
+      }
+    });
   }
 
   initElements() {
@@ -293,15 +332,25 @@ class DriveApp {
     });
   }
 
-  async navigate(path) {
-    this.currentPath = path;
-    await this.loadDirectory(path);
-    this.renderDriveList();
-  }
+  async loadDirectory(path, forceRefresh = false) {
+    const cacheKey = path.toUpperCase();
 
-  async loadDirectory(path) {
-    try {
+    // Tampilkan data dari memori cache secara instan (0ms) jika ada
+    if (!forceRefresh && this.dirCache.has(cacheKey)) {
+      const cached = this.dirCache.get(cacheKey);
+      this.currentPath = cached.currentPath;
+      this.parentPath = cached.parentPath;
+      this.items = cached.items || [];
+      this.filteredItems = [...this.items];
+
+      this.updateBreadcrumbs();
+      this.updateMetaHeader(cached);
+      this.renderItems();
+    } else {
       this.el.folderTitle.textContent = 'Memuat berkas...';
+    }
+
+    try {
       const res = await fetch(`api.php?action=list_files&path=${encodeURIComponent(path)}`);
       const data = await res.json();
 
@@ -310,6 +359,7 @@ class DriveApp {
         return;
       }
 
+      this.dirCache.set(cacheKey, data);
       this.currentPath = data.currentPath;
       this.parentPath = data.parentPath;
       this.items = data.items || [];
@@ -319,7 +369,9 @@ class DriveApp {
       this.updateMetaHeader(data);
       this.renderItems();
     } catch (err) {
-      this.showToast('Gagal memuat isi folder: ' + err.message, 'error');
+      if (!this.dirCache.has(cacheKey)) {
+        this.showToast('Gagal memuat isi folder: ' + err.message, 'error');
+      }
     }
   }
 
@@ -448,7 +500,7 @@ class DriveApp {
           <button class="btn-action-icon delete-btn" title="Hapus"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         </div>
         <div class="file-thumb">
-          ${isImage ? `<img src="${thumbUrl}" class="file-card-img-thumb" loading="lazy" decoding="async" alt="${item.name}" onerror="this.outerHTML='${this.getFileIconSvg('image', false)}'">` : this.getFileIconSvg(type, item.isDir)}
+          ${isImage ? `<img data-src="${thumbUrl}" class="file-card-img-thumb" decoding="async" alt="${item.name}" onerror="this.outerHTML='${this.getFileIconSvg('image', false)}'">` : this.getFileIconSvg(type, item.isDir)}
         </div>
         <div class="file-name" title="${item.name}">${item.name}</div>
         <div class="file-details">${item.isDir ? 'Folder' : item.sizeFormatted}</div>
@@ -473,6 +525,8 @@ class DriveApp {
 
       this.el.fileGrid.appendChild(card);
     });
+
+    this.observeImages(this.el.fileGrid);
   }
 
   renderGalleryView() {
@@ -491,7 +545,7 @@ class DriveApp {
       card.innerHTML = `
         <div class="gallery-thumb">
           ${isImage ? `
-            <img src="${thumbUrl}" class="gallery-img" loading="lazy" decoding="async" alt="${item.name}" onerror="this.outerHTML='<div class=\\'gallery-icon-wrap\\'>${this.getFileIconSvg('image', false)}</div>'">
+            <img data-src="${thumbUrl}" class="gallery-img" decoding="async" alt="${item.name}" onerror="this.outerHTML='<div class=\\'gallery-icon-wrap\\'>${this.getFileIconSvg('image', false)}</div>'">
             <span class="gallery-badge-type">${item.extension.toUpperCase()}</span>
           ` : `
             <div class="gallery-icon-wrap">${this.getFileIconSvg(type, item.isDir)}</div>
@@ -534,6 +588,8 @@ class DriveApp {
 
       this.el.fileGallery.appendChild(card);
     });
+
+    this.observeImages(this.el.fileGallery);
   }
 
   renderListView() {
