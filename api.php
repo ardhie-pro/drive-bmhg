@@ -246,12 +246,13 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 240, int $maxHeig
  * Mendapatkan daftar seluruh drive aktif di Windows (dengan caching cepat)
  */
 function getSystemDrives(array $excludedDrives = []): array {
-    $cacheFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_list_cache.json';
+    $cacheKey = md5(json_encode($excludedDrives));
+    $cacheFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_list_cache_' . $cacheKey . '.json';
     
-    // Cache drive list selama 6 detik untuk mencegah lag eksekusi PowerShell berkali-kali
-    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 6) {
+    // Cache drive list selama 4 detik untuk mencegah lag eksekusi PowerShell berkali-kali
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 4) {
         $cached = @json_decode(file_get_contents($cacheFile), true);
-        if (is_array($cached) && !empty($cached)) {
+        if (is_array($cached)) {
             return $cached;
         }
     }
