@@ -105,9 +105,9 @@ function getMimeType(string $filePath): string {
 }
 
 /**
- * Menghasilkan & men-cache thumbnail gambar super cepat (WebP / JPEG 280px)
+ * Menghasilkan & men-cache thumbnail gambar super cepat (WebP / JPEG 240px)
  */
-function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeight = 280): void {
+function serveImageThumbnail(string $filePath, int $maxWidth = 240, int $maxHeight = 240): void {
     if (session_status() === PHP_SESSION_ACTIVE) {
         session_write_close();
     }
@@ -121,14 +121,7 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeig
     // SVG atau ICO langsung sajikan tanpa resize
     if ($ext === 'svg' || $ext === 'ico') {
         header('Content-Type: ' . ($ext === 'svg' ? 'image/svg+xml' : 'image/x-icon'));
-        header('Cache-Control: public, max-age=604800, immutable');
-        readfile($filePath);
-        exit;
-    }
-
-    if (!extension_loaded('gd')) {
-        header('Content-Type: ' . getMimeType($filePath));
-        header('Cache-Control: public, max-age=604800, immutable');
+        header('Cache-Control: public, max-age=31536000, immutable');
         readfile($filePath);
         exit;
     }
@@ -150,17 +143,29 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeig
     // HTTP 304 Not Modified check jika browser sudah punya cache
     if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
         http_response_code(304);
+        header('Cache-Control: public, max-age=31536000, immutable');
+        header('ETag: ' . $etag);
         exit;
     }
 
+    // Jika file cache sudah ada di server, kirimkan langsung dalam 0ms
     if (file_exists($cacheFile) && filesize($cacheFile) > 0) {
         header('Content-Type: ' . ($supportWebp ? 'image/webp' : 'image/jpeg'));
         header('Content-Length: ' . filesize($cacheFile));
-        header('Cache-Control: public, max-age=2592000, immutable');
+        header('Cache-Control: public, max-age=31536000, immutable');
         header('ETag: ' . $etag);
         readfile($cacheFile);
         exit;
     }
+
+    if (!extension_loaded('gd')) {
+        header('Content-Type: ' . getMimeType($filePath));
+        header('Cache-Control: public, max-age=604800');
+        readfile($filePath);
+        exit;
+    }
+
+    @ini_set('memory_limit', '256M');
 
     // Buat thumbnail baru berukuran ringan
     $srcImg = null;
@@ -184,7 +189,6 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeig
     }
 
     if (!$srcImg) {
-        // Fallback jika format khusus tidak didukung GD
         header('Content-Type: ' . getMimeType($filePath));
         header('Cache-Control: public, max-age=604800');
         readfile($filePath);
@@ -201,7 +205,7 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeig
         exit;
     }
 
-    // Hitung dimensi target proporsional (max 280px)
+    // Hitung dimensi target proporsional (max 240px)
     $ratio = min($maxWidth / $origW, $maxHeight / $origH, 1.0);
     $newW = max(1, (int)round($origW * $ratio));
     $newH = max(1, (int)round($origH * $ratio));
@@ -220,10 +224,10 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeig
     imagedestroy($srcImg);
 
     if ($supportWebp) {
-        @imagewebp($thumb, $cacheFile, 78);
+        @imagewebp($thumb, $cacheFile, 70);
         header('Content-Type: image/webp');
     } else {
-        @imagejpeg($thumb, $cacheFile, 80);
+        @imagejpeg($thumb, $cacheFile, 75);
         header('Content-Type: image/jpeg');
     }
 
@@ -231,7 +235,7 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeig
 
     if (file_exists($cacheFile)) {
         header('Content-Length: ' . filesize($cacheFile));
-        header('Cache-Control: public, max-age=2592000, immutable');
+        header('Cache-Control: public, max-age=31536000, immutable');
         header('ETag: ' . $etag);
         readfile($cacheFile);
     }
@@ -239,12 +243,19 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeig
 }
 
 /**
- * Mendapatkan daftar seluruh drive aktif di Windows
- */
-/**
- * Mendapatkan daftar seluruh drive aktif di Windows (kecuali drive yang dikecualikan)
+ * Mendapatkan daftar seluruh drive aktif di Windows (dengan caching cepat)
  */
 function getSystemDrives(array $excludedDrives = []): array {
+    $cacheFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_list_cache.json';
+    
+    // Cache drive list selama 6 detik untuk mencegah lag eksekusi PowerShell berkali-kali
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 6) {
+        $cached = @json_decode(file_get_contents($cacheFile), true);
+        if (is_array($cached) && !empty($cached)) {
+            return $cached;
+        }
+    }
+
     $drives = [];
     
     // Gunakan PowerShell CIM / WMI untuk data akurat tentang Flashdisk (Removable), HDD/SSD, dan label
