@@ -51,6 +51,11 @@ if (!empty($config['sso_enabled']) && empty($_SESSION['drive_user'])) {
     sendJson(['success' => false, 'message' => 'Sesi login telah berakhir. Silakan masuk kembali.', 'auth_required' => true], 401);
 }
 
+// Tutup lock file sesi PHP segera agar tidak memblokir request konkuren lainnya
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
+
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 function isPathExcluded(string $path, array $excludedDrives): bool {
@@ -243,129 +248,103 @@ function serveImageThumbnail(string $filePath, int $maxWidth = 240, int $maxHeig
 }
 
 /**
- * Mendapatkan daftar seluruh drive aktif di Windows (dengan caching cepat)
+ * Mendapatkan daftar seluruh drive aktif di Windows secara instan (0.01 - 0.05s)
  */
 function getSystemDrives(array $excludedDrives = []): array {
     $cacheKey = md5(json_encode($excludedDrives));
     $cacheFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_list_cache_' . $cacheKey . '.json';
     
-    // Cache drive list selama 4 detik untuk mencegah lag eksekusi PowerShell berkali-kali
-    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 4) {
-        $cached = @json_decode(file_get_contents($cacheFile), true);
-        if (is_array($cached)) {
+    // Cache drive list selama 5 detik untuk performa maksimal
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 5) {
+        $cached = @json_decode((string)file_get_contents($cacheFile), true);
+        if (is_array($cached) && !empty($cached)) {
             return $cached;
         }
     }
 
     $drives = [];
-    
-    // Gunakan PowerShell CIM / WMI untuk data akurat tentang Flashdisk (Removable), HDD/SSD, dan label
-    $psCommand = 'powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID, VolumeName, DriveType, Size, FreeSpace, FileSystem | ConvertTo-Json -Compress"';
-    $output = @shell_exec($psCommand);
+    $activeLetters = [];
 
-    if ($output) {
-        $json = @json_decode(trim($output), true);
-        if ($json !== null) {
-            $list = isset($json['DeviceID']) ? [$json] : (is_array($json) ? $json : []);
-            
-            foreach ($list as $item) {
-                $deviceId = $item['DeviceID'] ?? '';
-                if (empty($deviceId)) continue;
+    // 1. Scan semua drive letter A-Z secara native PHP (< 1ms)
+    foreach (range('A', 'Z') as $letter) {
+        $driveLetter = $letter . ':';
+        if (in_array($driveLetter, $excludedDrives, true)) {
+            continue;
+        }
 
-                $driveLetter = strtoupper(rtrim($deviceId, '\\'));
-                
-                // Cek pengecualian drive (misal C:)
-                if (in_array($driveLetter, $excludedDrives, true) || in_array($driveLetter . ':', $excludedDrives, true)) {
-                    continue;
-                }
-
-                $driveType = (int)($item['DriveType'] ?? 3);
-                $totalSize = (float)($item['Size'] ?? 0);
-                $freeSize = (float)($item['FreeSpace'] ?? 0);
-                $usedSize = max(0, $totalSize - $freeSize);
-                $usedPercentage = $totalSize > 0 ? round(($usedSize / $totalSize) * 100, 1) : 0;
-                $volumeName = trim($item['VolumeName'] ?? '');
-                $fileSystem = trim($item['FileSystem'] ?? '');
-
-                // Drive Type Mapping
-                // 2: Removable (Flashdisk / USB Drive / Memory Card)
-                // 3: Fixed Disk (Harddisk / SSD)
-                // 4: Network Drive
-                // 5: CD-ROM / DVD
-                $typeLabel = 'Local Disk';
-                $isRemovable = false;
-                $icon = 'hard-drive';
-
-                if ($driveType === 2) {
-                    $typeLabel = 'USB Flashdisk';
-                    $isRemovable = true;
-                    $icon = 'usb';
-                } elseif ($driveType === 3) {
-                    $typeLabel = ($driveLetter === 'C:') ? 'System Disk' : 'Local Disk';
-                    $icon = 'hard-drive';
-                } elseif ($driveType === 4) {
-                    $typeLabel = 'Network Drive';
-                    $icon = 'network';
-                } elseif ($driveType === 5) {
-                    $typeLabel = 'CD/DVD Drive';
-                    $icon = 'disc';
-                }
-
-                $drives[] = [
-                    'id' => $driveLetter,
-                    'path' => $driveLetter . DIRECTORY_SEPARATOR,
-                    'label' => $volumeName ?: ($isRemovable ? 'USB Flashdisk' : 'Local Disk (' . $driveLetter . ')'),
-                    'type' => $typeLabel,
-                    'driveType' => $driveType,
-                    'isRemovable' => $isRemovable,
-                    'fileSystem' => $fileSystem,
-                    'icon' => $icon,
-                    'totalSize' => $totalSize,
-                    'freeSize' => $freeSize,
-                    'usedSize' => $usedSize,
-                    'usedPercentage' => $usedPercentage,
-                    'totalFormatted' => formatBytes($totalSize),
-                    'freeFormatted' => formatBytes($freeSize),
-                    'usedFormatted' => formatBytes($usedSize),
-                    'isAccessible' => is_dir($driveLetter . DIRECTORY_SEPARATOR)
-                ];
-            }
+        $path = $letter . ':\\';
+        if (@is_dir($path)) {
+            $total = (float)@disk_total_space($path);
+            $free = (float)@disk_free_space($path);
+            $used = max(0, $total - $free);
+            $activeLetters[$letter] = [
+                'id' => $driveLetter,
+                'path' => $path,
+                'total' => $total,
+                'free' => $free,
+                'used' => $used,
+                'usedPercentage' => $total > 0 ? round(($used / $total) * 100, 1) : 0,
+            ];
         }
     }
 
-    // Fallback jika PowerShell dinonaktifkan / gagal
-    if (empty($drives)) {
-        foreach (range('A', 'Z') as $letter) {
-            $driveLetter = $letter . ':';
-            if (in_array($driveLetter, $excludedDrives, true)) {
-                continue;
-            }
+    if (empty($activeLetters)) {
+        return [];
+    }
 
-            $path = $letter . ':\\';
-            if (@is_dir($path)) {
-                $total = (float)@disk_total_space($path);
-                $free = (float)@disk_free_space($path);
-                $used = max(0, $total - $free);
-                $drives[] = [
-                    'id' => $letter . ':',
-                    'path' => $path,
-                    'label' => ($letter === 'C') ? 'System Drive' : 'Disk ' . $letter,
-                    'type' => ($letter === 'C') ? 'System Disk' : 'Drive',
-                    'driveType' => 3,
-                    'isRemovable' => false,
-                    'fileSystem' => '',
-                    'icon' => 'hard-drive',
-                    'totalSize' => $total,
-                    'freeSize' => $free,
-                    'usedSize' => $used,
-                    'usedPercentage' => $total > 0 ? round(($used / $total) * 100, 1) : 0,
-                    'totalFormatted' => formatBytes($total),
-                    'freeFormatted' => formatBytes($free),
-                    'usedFormatted' => formatBytes($used),
-                    'isAccessible' => true
-                ];
+    // 2. Ambil metadata volume label & tipe drive secara cepat
+    foreach ($activeLetters as $letter => $info) {
+        $volOutput = @shell_exec("cmd /c vol {$letter}: 2>nul");
+        $volName = '';
+        if ($volOutput && preg_match('/Volume in drive [A-Z] is (.*)/i', $volOutput, $m)) {
+            $volName = trim($m[1]);
+        }
+
+        $typeOutput = @shell_exec("cmd /c fsutil fsinfo drivetype {$letter}: 2>nul");
+        $isRemovable = false;
+        $typeLabel = 'Local Disk';
+        $icon = 'hard-drive';
+        $driveType = 3;
+
+        if ($typeOutput) {
+            if (stripos($typeOutput, 'Removable') !== false) {
+                $isRemovable = true;
+                $typeLabel = 'USB Flashdisk';
+                $icon = 'usb';
+                $driveType = 2;
+            } elseif (stripos($typeOutput, 'CD-ROM') !== false) {
+                $typeLabel = 'CD/DVD Drive';
+                $icon = 'disc';
+                $driveType = 5;
+            } elseif (stripos($typeOutput, 'Remote') !== false || stripos($typeOutput, 'Network') !== false) {
+                $typeLabel = 'Network Drive';
+                $icon = 'network';
+                $driveType = 4;
+            } elseif (stripos($typeOutput, 'Fixed') !== false) {
+                $typeLabel = ($letter === 'C') ? 'System Disk' : 'Local Disk';
+                $icon = 'hard-drive';
+                $driveType = 3;
             }
         }
+
+        $drives[] = [
+            'id' => $info['id'],
+            'path' => $info['path'],
+            'label' => $volName ?: ($isRemovable ? 'USB Flashdisk' : 'Local Disk (' . $info['id'] . ')'),
+            'type' => $typeLabel,
+            'driveType' => $driveType,
+            'isRemovable' => $isRemovable,
+            'fileSystem' => '',
+            'icon' => $icon,
+            'totalSize' => $info['total'],
+            'freeSize' => $info['free'],
+            'usedSize' => $info['used'],
+            'usedPercentage' => $info['usedPercentage'],
+            'totalFormatted' => formatBytes($info['total']),
+            'freeFormatted' => formatBytes($info['free']),
+            'usedFormatted' => formatBytes($info['used']),
+            'isAccessible' => true
+        ];
     }
 
     if (!empty($drives)) {

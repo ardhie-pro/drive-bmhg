@@ -1,0 +1,9 @@
+﻿# Sensitive local configuration
+cloudflare-startup/config.json
+
+# OS and editor files
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/

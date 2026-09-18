@@ -19,6 +19,8 @@ $currentUser = $_SESSION['drive_user'] ?? [
     'email' => 'admin@beasiswamahaghora.com',
     'status' => 'admin'
 ];
+$userName = $currentUser['name'] ?? 'Admin Mahaghora';
+$userRole = ucfirst($currentUser['status'] ?? 'Admin');
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -190,11 +192,11 @@ $currentUser = $_SESSION['drive_user'] ?? [
             <div class="user-avatar-circle">
               <?= strtoupper(substr($userName, 0, 1)) ?>
             </div>
-            <div class="user-meta-info">
-              <span class="user-meta-name"><?= htmlspecialchars($userName) ?></span>
-              <span class="user-meta-role"><?= htmlspecialchars($userRole) ?></span>
+            <div class="user-profile-info">
+              <span class="user-name-text"><?= htmlspecialchars($userName) ?></span>
+              <span class="user-role-tag"><?= htmlspecialchars($userRole) ?></span>
             </div>
-            <a href="logout.php" class="btn-logout-badge" title="Keluar / Logout">
+            <a href="logout.php" class="btn-logout-icon" title="Keluar / Logout">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                 <polyline points="16 17 21 12 16 7"/>
@@ -205,24 +207,18 @@ $currentUser = $_SESSION['drive_user'] ?? [
         </div>
       </header>
 
-      <!-- Main Explorer Body -->
-      <div class="explorer-body">
-        <!-- Breadcrumbs bar -->
-        <div class="breadcrumbs-container">
-          <div id="breadcrumbs" class="breadcrumbs-list">
-            <!-- Breadcrumbs injected via JS -->
+      <!-- Main Explorer Container -->
+      <div class="explorer-container">
+        <!-- Sub-header inside Explorer -->
+        <div class="explorer-meta-header">
+          <div class="folder-title-wrap">
+            <h2 id="folderTitle" class="folder-title">Memuat berkas...</h2>
+            <span id="folderStats" class="folder-stats-badge">-</span>
           </div>
         </div>
 
-        <!-- Folder Content Area -->
-        <div class="content-view-area">
-          <div class="content-header-meta">
-            <div>
-              <h2 id="folderTitle" class="folder-main-title">Memuat berkas...</h2>
-              <p id="folderStats" class="folder-sub-stats">-</p>
-            </div>
-          </div>
-
+        <!-- Content Container Card -->
+        <div class="content-board-card">
           <!-- Drop Overlay -->
           <div id="dropOverlay" class="drop-zone-overlay">
             <div class="drop-icon-box">
@@ -283,7 +279,7 @@ $currentUser = $_SESSION['drive_user'] ?? [
             </button>
           </div>
         </div>
-      </section>
+      </div>
     </main>
   </div>
 

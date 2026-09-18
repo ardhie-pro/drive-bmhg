@@ -274,12 +274,18 @@ class DriveApp {
    * Periodically poll for drive changes (USB Flashdisk plugged / unplugged)
    */
   initDrivePolling() {
+    this.isPollingDrives = false;
     setInterval(() => {
-      this.loadDrives(false, true);
-    }, 4500);
+      if (!this.isPollingDrives) {
+        this.loadDrives(false, true);
+      }
+    }, 5000);
   }
 
   async loadDrives(isInitial = false, isBackground = false) {
+    if (this.isPollingDrives && isBackground) return;
+    this.isPollingDrives = true;
+
     try {
       const res = await fetch('api.php?action=get_drives');
       if (res.status === 401) {
@@ -319,12 +325,12 @@ class DriveApp {
             const targetDrive = usbDrive || newDrives[0];
             this.navigate(targetDrive.path);
           } else {
-            this.el.folderTitle.textContent = 'Belum Ada Drive Terhubung';
-            this.el.folderStats.textContent = '0 item';
-            this.el.emptyState.style.display = 'flex';
-            this.el.fileGrid.style.display = 'none';
+            if (this.el.folderTitle) this.el.folderTitle.textContent = 'Belum Ada Drive Terhubung';
+            if (this.el.folderStats) this.el.folderStats.textContent = '0 item';
+            if (this.el.emptyState) this.el.emptyState.style.display = 'flex';
+            if (this.el.fileGrid) this.el.fileGrid.style.display = 'none';
             if (this.el.fileGallery) this.el.fileGallery.style.display = 'none';
-            this.el.fileListTable.style.display = 'none';
+            if (this.el.fileListTable) this.el.fileListTable.style.display = 'none';
           }
         }
       }
@@ -332,6 +338,14 @@ class DriveApp {
       if (!isBackground) {
         this.showToast('Gagal memuat daftar drive: ' + err.message, 'error');
       }
+      if (isInitial) {
+        if (this.el.driveCountBadge) this.el.driveCountBadge.textContent = '0 Terhubung';
+        if (this.el.folderTitle) this.el.folderTitle.textContent = 'Belum Ada Drive Terhubung';
+        if (this.el.folderStats) this.el.folderStats.textContent = 'Gagal memuat drive';
+        if (this.el.emptyState) this.el.emptyState.style.display = 'flex';
+      }
+    } finally {
+      this.isPollingDrives = false;
     }
   }
 
@@ -418,7 +432,7 @@ class DriveApp {
       this.updateMetaHeader(cached);
       this.renderItems();
     } else {
-      this.el.folderTitle.textContent = 'Memuat berkas...';
+      if (this.el.folderTitle) this.el.folderTitle.textContent = 'Memuat berkas...';
     }
 
     try {
@@ -435,6 +449,12 @@ class DriveApp {
 
       if (!data.success) {
         this.showToast(data.message || 'Gagal membuka direktori', 'error');
+        const folderName = path.replace(/[/\\]$/, '').split(/[/\\]/).pop() || path;
+        if (this.el.folderTitle) this.el.folderTitle.textContent = folderName;
+        if (this.el.folderStats) this.el.folderStats.textContent = data.message || 'Akses ditolak';
+        this.items = [];
+        this.filteredItems = [];
+        this.renderItems();
         return;
       }
 
@@ -450,6 +470,12 @@ class DriveApp {
     } catch (err) {
       if (!this.dirCache.has(cacheKey)) {
         this.showToast('Gagal memuat isi folder: ' + err.message, 'error');
+        const folderName = path.replace(/[/\\]$/, '').split(/[/\\]/).pop() || path;
+        if (this.el.folderTitle) this.el.folderTitle.textContent = folderName;
+        if (this.el.folderStats) this.el.folderStats.textContent = 'Gagal memuat folder';
+        this.items = [];
+        this.filteredItems = [];
+        this.renderItems();
       }
     }
   }
