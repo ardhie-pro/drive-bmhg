@@ -36,7 +36,7 @@ function videoPreviewStatus(string $source): array {
     $heartbeat = "$root/heartbeat.json";
     $worker = is_file($heartbeat) ? json_decode(file_get_contents($heartbeat), true) : null;
     if (!$worker || ($worker['time'] ?? 0) < time() - 30) {
-        return ['state' => 'unavailable', 'message' => 'Versi hemat belum tersedia. Gunakan video asli.'];
+        return ['state' => 'unavailable', 'code' => 'worker_unavailable', 'message' => 'Worker video belum aktif di server asal. Sementara video asli diputar; versi hemat mulai disiapkan setelah worker aktif.'];
     }
     $statePath = "$root/$key.state.json";
     if (is_file($statePath)) {
@@ -44,7 +44,7 @@ function videoPreviewStatus(string $source): array {
         if (in_array($state['state'] ?? '', ['processing', 'failed'], true)) return $state;
     }
     if (filesize($source) > 4 * 1024 * 1024 * 1024) {
-        return ['state' => 'unavailable', 'message' => 'Video ini perlu dibuka dari file asli.'];
+        return ['state' => 'unavailable', 'code' => 'file_too_large', 'message' => 'Ukuran video melewati batas konversi 4 GB. File asli tetap bisa diputar.'];
     }
     $queued = 0;
     foreach (new DirectoryIterator($root) as $file) {

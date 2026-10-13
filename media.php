@@ -112,8 +112,11 @@ function imageResizeFallback(string $path, int $width, string $reason): never {
 function buildLargeJpegPreview(string $source, string $cache, int $width, int $height, bool $webp): bool {
     $ffmpeg = __DIR__ . '/.local-server/tools/ffmpeg.exe';
     $temporary = $cache . '.' . bin2hex(random_bytes(6)) . '.tmp';
+    $dimensions = @getimagesize($source);
+    $pixels = $dimensions ? $dimensions[0] * $dimensions[1] : 0;
+    $lowres = $pixels > 16000000 ? ($width <= 280 ? '3' : '2') : '0';
     $command = [$ffmpeg, '-hide_banner', '-nostdin', '-loglevel', 'error', '-y', '-protocol_whitelist', 'file,pipe',
-        '-threads', '1', '-max_alloc', '134217728', '-lowres', $width <= 280 ? '3' : '2', '-i', $source,
+        '-threads', '1', '-max_alloc', '134217728', '-lowres', $lowres, '-i', $source,
         '-frames:v', '1', '-filter_threads', '1', '-vf', "scale=w='min($width,iw)':h='min($height,ih)':force_original_aspect_ratio=decrease",
         '-threads', '1', '-c:v', $webp ? 'libwebp' : 'mjpeg', '-f', $webp ? 'webp' : 'image2', $temporary];
     $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'w'],
@@ -149,13 +152,13 @@ function serveOptimizedImage(string $path, int $width, int $height): never {
     $size = @getimagesize($path);
     // Bound decode memory before GD allocates the original full-resolution bitmap.
     if (!$size || $size[0] <= 0 || $size[1] <= 0) imageResizeFallback($path, $width, 'Format perlu dibuka sebagai file asli');
-    if (!extension_loaded('gd')) imageResizeFallback($path, $width, 'Resize belum tersedia di server');
     $externalResize = false;
-    if ($size[0] * $size[1] > 16000000 || filesize($path) > 40 * 1024 * 1024) {
+    $needsExternalResize = !extension_loaded('gd') || $size[0] * $size[1] > 16000000 || filesize($path) > 40 * 1024 * 1024;
+    if ($needsExternalResize) {
         $externalResize = $size[2] === IMAGETYPE_JPEG && $size[0] * $size[1] <= 150000000
             && filesize($path) <= 80 * 1024 * 1024 && function_exists('proc_open')
             && is_file(__DIR__ . '/.local-server/tools/ffmpeg.exe');
-        if (!$externalResize) imageResizeFallback($path, $width, 'Gambar besar: klik untuk membuka');
+        if (!$externalResize) imageResizeFallback($path, $width, !extension_loaded('gd') ? 'Resize gambar belum tersedia di server' : 'Gambar besar: klik untuk membuka');
     }
     $key = hash('sha256', $path . ':' . filemtime($path) . ':' . filesize($path) . ":$width:$height:v3");
     $directory = sys_get_temp_dir() . '/drive_thumb_cache';

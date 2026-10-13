@@ -7,6 +7,11 @@ if (session_status() === PHP_SESSION_NONE) {
 
 $config = require __DIR__ . '/config.php';
 
+if (!empty($_SESSION['drive_share_only'])) {
+    header('Location: share.php');
+    exit;
+}
+
 // Validasi autentikasi SSO jika diaktifkan di konfigurasi
 if (!empty($config['sso_enabled']) && empty($_SESSION['drive_user'])) {
     header('Location: login.php');
@@ -435,6 +440,26 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
           </svg>
           Ekstrak File
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Media & Code Preview -->
+  <div id="shareModal" class="modal-overlay">
+    <div class="modal-box" style="max-width:620px;">
+      <div class="modal-header">
+        <div><div class="modal-title">Bagikan folder</div><div id="shareFolderName" style="font-size:.82rem;color:var(--text-muted);margin-top:4px;"></div></div>
+        <button class="btn-icon-mini btn-close-modal" aria-label="Tutup"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:.86rem;color:var(--text-secondary);">Penerima harus masuk melalui Google SSO Beasiswa Mahaghora. Link hanya membuka folder ini dan isinya.</p>
+        <label for="sharePermission" style="display:block;font-weight:600;margin:14px 0 6px;">Izin akses</label>
+        <select id="sharePermission" class="form-input" style="width:100%;">
+          <option value="viewer">Pelihat — lihat dan unduh</option>
+          <option value="editor">Editor — upload, buat folder, ubah nama, dan hapus isi folder</option>
+        </select>
+        <button id="btnCreateShare" class="btn btn-primary" style="margin-top:12px;">Buat link berbagi</button>
+        <div id="shareLinksList" style="margin-top:16px;display:grid;gap:10px;"></div>
       </div>
     </div>
   </div>

@@ -60,8 +60,16 @@ if (!$user || empty($user['id'])) {
 // Cek hak akses role
 $allowedRoles = $config['allowed_roles'] ?? ['admin', 'beswan'];
 $userStatus = strtolower($user['status'] ?? '');
+$hasRegularAccess = empty($allowedRoles) || in_array($userStatus, array_map('strtolower', $allowedRoles), true);
+$pendingShareToken = (string)($_SESSION['pending_share_token'] ?? '');
+$pendingShare = null;
+if ($pendingShareToken !== '') {
+    require_once __DIR__ . '/share-links.php';
+    $pendingShare = findShareLink($pendingShareToken);
+    if (!$pendingShare || empty($pendingShare['active'])) $pendingShareToken = '';
+}
 
-if (!empty($allowedRoles) && !in_array($userStatus, array_map('strtolower', $allowedRoles), true)) {
+if (!$hasRegularAccess && $pendingShareToken === '') {
     header('Location: login.php?error=' . urlencode("Akun Anda ({$user['email']}) dengan status '{$userStatus}' tidak memiliki izin mengakses Drive. Hubungi Admin."));
     exit;
 }
@@ -74,6 +82,14 @@ $_SESSION['drive_user'] = [
     'status' => $user['status'] ?? 'user',
     'login_time' => time()
 ];
+
+if ($pendingShareToken !== '') {
+    $_SESSION['active_share_token'] = $pendingShareToken;
+    $_SESSION['drive_share_only'] = !$hasRegularAccess;
+    unset($_SESSION['pending_share_token']);
+    header('Location: share.php?token=' . rawurlencode($pendingShareToken));
+    exit;
+}
 
 header('Location: index.php');
 exit;

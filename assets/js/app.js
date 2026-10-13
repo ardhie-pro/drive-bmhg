@@ -55,13 +55,19 @@ class DriveApp {
     if (!container) return;
     const lazyImages = container.querySelectorAll('img[data-src]');
     lazyImages.forEach(img => {
-      img.onerror = () => { img.outerHTML = this.getFileIconSvg('image', false); };
+      img.onerror = () => { img.replaceWith(this.svgIconElement(this.getFileIconSvg('image', false))); };
       if (this.imageObserver) {
         this.imageObserver.observe(img);
       } else {
         this.enqueueThumbnail(img, img.getAttribute('data-src'));
       }
     });
+  }
+
+  svgIconElement(markup) {
+    const template = document.createElement('template');
+    template.innerHTML = markup;
+    return template.content.firstElementChild;
   }
 
   enqueueThumbnail(img, src) {
@@ -198,6 +204,12 @@ class DriveApp {
       extractItemName: document.getElementById('extractItemName'),
       btnConfirmExtract: document.getElementById('btnConfirmExtract'),
 
+      shareModal: document.getElementById('shareModal'),
+      shareFolderName: document.getElementById('shareFolderName'),
+      sharePermission: document.getElementById('sharePermission'),
+      btnCreateShare: document.getElementById('btnCreateShare'),
+      shareLinksList: document.getElementById('shareLinksList'),
+
       previewModal: document.getElementById('previewModal'),
       previewTitle: document.getElementById('previewTitle'),
       previewContainer: document.getElementById('previewContainer'),
@@ -290,6 +302,8 @@ class DriveApp {
     this.el.extractFolderNameInput?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.submitExtract();
     });
+
+    this.el.btnCreateShare?.addEventListener('click', () => this.createShareLink());
 
     // Download Folder as ZIP
     this.el.btnDownloadZip?.addEventListener('click', () => {
@@ -662,6 +676,113 @@ class DriveApp {
     }
   }
 
+  createShareButton(item) {
+    if (!item.isDir) return null;
+    const button = document.createElement('button');
+    button.className = 'btn-action-icon share-btn';
+    button.title = 'Bagikan folder';
+    button.setAttribute('aria-label', `Bagikan folder ${item.name}`);
+    button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.7 10.7 6.6-4.4M8.7 13.3l6.6 4.4"/></svg>';
+    button.addEventListener('click', (event) => { event.stopPropagation(); this.openShareModal(item); });
+    return button;
+  }
+
+  async openShareModal(item) {
+    this.shareItem = item;
+    this.el.shareFolderName.textContent = item.name;
+    this.el.shareLinksList.replaceChildren();
+    this.el.shareModal.classList.add('active');
+    await this.refreshShareLinks();
+  }
+
+  async refreshShareLinks() {
+    if (!this.shareItem) return;
+    const list = this.el.shareLinksList;
+    list.replaceChildren();
+    const loading = document.createElement('div');
+    loading.textContent = 'Memuat tautan…';
+    loading.style.color = 'var(--text-muted)';
+    list.append(loading);
+    try {
+      const response = await fetch(`share-api.php?action=share_list&path=${encodeURIComponent(this.shareItem.path)}`);
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.message || 'Tautan tidak dapat dimuat.');
+      list.replaceChildren();
+      if (!result.links.length) {
+        const empty = document.createElement('div');
+        empty.textContent = 'Belum ada link untuk folder ini.';
+        empty.style.color = 'var(--text-muted)';
+        list.append(empty);
+      }
+      result.links.forEach(link => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;border:1px solid var(--border-color);border-radius:10px;padding:10px;';
+        const details = document.createElement('div');
+        details.style.cssText = 'min-width:0;';
+        const label = document.createElement('div');
+        label.textContent = `${link.permission === 'editor' ? 'Editor' : 'Pelihat'} · ${link.active ? 'Aktif' : 'Dicabut'}`;
+        label.style.fontWeight = '600';
+        const anchor = document.createElement('a');
+        anchor.href = new URL(link.url, location.href).toString();
+        anchor.textContent = anchor.href;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener';
+        anchor.style.cssText = 'display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.75rem;';
+        details.append(label, anchor);
+        row.append(details);
+        if (link.active) {
+          const copy = document.createElement('button');
+          copy.className = 'btn btn-secondary';
+          copy.textContent = 'Salin';
+          copy.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(anchor.href); this.showToast('Link berhasil disalin.', 'success'); }
+            catch { anchor.focus(); anchor.select?.(); this.showToast('Salin link dari kolom yang tampil.', 'info'); }
+          });
+          const revoke = document.createElement('button');
+          revoke.className = 'btn btn-secondary';
+          revoke.textContent = 'Cabut';
+          revoke.addEventListener('click', async () => {
+            if (!confirm('Cabut akses dari link ini?')) return;
+            const data = new FormData(); data.set('id', link.id);
+            try {
+              const response = await fetch('share-api.php?action=share_revoke', { method: 'POST', body: data });
+              const result = await response.json();
+              if (!response.ok || !result.success) throw new Error(result.message || 'Link gagal dicabut.');
+              await this.refreshShareLinks();
+            } catch (error) { this.showToast(error.message, 'error'); }
+          });
+          row.append(copy, revoke);
+        }
+        list.append(row);
+      });
+    } catch (error) {
+      list.replaceChildren();
+      const failed = document.createElement('div');
+      failed.textContent = error.message;
+      failed.style.color = 'var(--accent-rose)';
+      list.append(failed);
+    }
+  }
+
+  async createShareLink() {
+    if (!this.shareItem) return;
+    const data = new FormData();
+    data.set('path', this.shareItem.path);
+    data.set('permission', this.el.sharePermission.value);
+    this.el.btnCreateShare.disabled = true;
+    try {
+      const response = await fetch('share-api.php?action=share_create', { method: 'POST', body: data });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.message || 'Link gagal dibuat.');
+      await this.refreshShareLinks();
+      this.showToast('Link berbagi berhasil dibuat.', 'success');
+    } catch (error) {
+      this.showToast(error.message, 'error');
+    } finally {
+      this.el.btnCreateShare.disabled = false;
+    }
+  }
+
   renderGridView() {
     this.el.fileGrid.innerHTML = '';
     this.filteredItems.forEach(item => {
@@ -716,6 +837,8 @@ class DriveApp {
 
       // Actions
       card.querySelector('.preview-btn')?.addEventListener('click', () => this.openPreview(item));
+      const shareButton = this.createShareButton(item);
+      if (shareButton) card.querySelector('.file-actions-hover')?.append(shareButton);
       card.querySelector('.extract-btn')?.addEventListener('click', () => this.openExtractModal(item));
       card.querySelector('.compress-btn')?.addEventListener('click', () => this.openCompressModal(item));
       card.querySelector('.download-btn')?.addEventListener('click', () => this.downloadItem(item.path, item.isDir));
@@ -795,6 +918,8 @@ class DriveApp {
       });
 
       card.querySelector('.preview-btn')?.addEventListener('click', () => this.openPreview(item));
+      const shareButton = this.createShareButton(item);
+      if (shareButton) card.querySelector('.gallery-actions-hover')?.append(shareButton);
       card.querySelector('.extract-btn')?.addEventListener('click', () => this.openExtractModal(item));
       card.querySelector('.compress-btn')?.addEventListener('click', () => this.openCompressModal(item));
       card.querySelector('.download-btn')?.addEventListener('click', () => this.downloadItem(item.path, item.isDir));
@@ -864,6 +989,8 @@ class DriveApp {
       });
 
       tr.querySelector('.preview-btn')?.addEventListener('click', () => this.openPreview(item));
+      const shareButton = this.createShareButton(item);
+      if (shareButton) tr.querySelector('td:last-child > div')?.append(shareButton);
       tr.querySelector('.extract-btn')?.addEventListener('click', () => this.openExtractModal(item));
       tr.querySelector('.compress-btn')?.addEventListener('click', () => this.openCompressModal(item));
       tr.querySelector('.download-btn')?.addEventListener('click', () => this.downloadItem(item.path, item.isDir));
@@ -1483,9 +1610,11 @@ class DriveApp {
       videoEl.playsInline = true;
       let lightReady = false;
       let mediaRetries = 0;
+      let activeVideoMode = 'original';
       const setVideoSource = (url) => {
         clearTimeout(this.videoRetryTimer);
         const position = videoEl.currentTime || 0;
+        activeVideoMode = url.includes('action=video_preview') ? 'light' : 'original';
         videoEl.pause();
         videoEl.src = url;
         videoEl.onloadedmetadata = () => {
@@ -1503,10 +1632,8 @@ class DriveApp {
           statusLabel.textContent = 'Memutar versi hemat (480p).';
           setVideoSource(`api.php?action=video_preview&path=${encodeURIComponent(item.path)}`);
         } else {
-          videoEl.pause();
-          videoEl.removeAttribute('src');
-          videoEl.load();
-          statusLabel.textContent = 'Versi hemat masih disiapkan. Video asli tersedia sementara.';
+          statusLabel.textContent = 'Meminta versi hemat. Video asli diputar sementara sampai hasilnya siap.';
+          checkLightVideo();
         }
       });
       const checkLightVideo = async () => {
@@ -1526,16 +1653,19 @@ class DriveApp {
             return;
           }
           if (result.state === 'unavailable' || result.state === 'failed') {
-            quality.value = 'original';
-            quality.querySelector('option[value="light"]').disabled = true;
-            statusLabel.textContent = result.message || 'Versi hemat belum tersedia. Memutar video asli.';
-            setVideoSource(previewUrl);
+            statusLabel.textContent = result.message || 'Versi hemat belum tersedia. Video asli tetap bisa diputar.';
+            if (!videoEl.getAttribute('src')) setVideoSource(previewUrl);
+            if (result.code === 'worker_unavailable' && previewGeneration === this.previewGeneration) {
+              this.videoPollTimer = setTimeout(checkLightVideo, 10000);
+            }
             return;
           }
           if (quality.value === 'light') statusLabel.textContent = result.message || 'Menyiapkan versi hemat. Video asli tersedia sementara.';
+          if (!videoEl.getAttribute('src')) setVideoSource(previewUrl);
         } catch (error) {
           if (controller.signal.aborted) return;
           statusLabel.textContent = 'Belum dapat menyiapkan versi hemat. Pilih Video asli atau coba lagi.';
+          if (!videoEl.getAttribute('src')) setVideoSource(previewUrl);
         }
         if (previewGeneration === this.previewGeneration) this.videoPollTimer = setTimeout(checkLightVideo, 3000);
       };
@@ -1549,7 +1679,9 @@ class DriveApp {
       videoEl.addEventListener('playing', () => {
         this.mediaWaitingNotice = false;
         mediaRetries = 0;
-        statusLabel.textContent = quality.value === 'light' ? 'Memutar versi hemat (480p).' : 'Memutar video asli.';
+        statusLabel.textContent = activeVideoMode === 'light'
+          ? 'Memutar versi hemat (480p).'
+          : (quality.value === 'light' ? 'Memutar video asli sementara; versi hemat disiapkan.' : 'Memutar video asli.');
       });
       videoEl.onerror = () => {
         if (previewGeneration !== this.previewGeneration) return;

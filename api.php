@@ -53,6 +53,9 @@ function sendJson(array $data, int $statusCode = 200): void {
 if (!empty($config['sso_enabled']) && empty($_SESSION['drive_user'])) {
     sendJson(['success' => false, 'message' => 'Sesi login telah berakhir. Silakan masuk kembali.', 'auth_required' => true], 401);
 }
+if (!empty($_SESSION['drive_share_only'])) {
+    sendJson(['success' => false, 'message' => 'Akun tamu hanya dapat membuka folder melalui tautan berbagi.'], 403);
+}
 
 // Tutup lock file sesi PHP segera agar tidak memblokir request konkuren lainnya
 if (session_status() === PHP_SESSION_ACTIVE) {

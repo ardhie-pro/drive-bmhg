@@ -28,10 +28,15 @@ $scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
 $currentBaseUrl = $protocol . $host . ($scriptDir ? $scriptDir : '');
 
 $ssoServerUrl = rtrim($config['sso_server_url'] ?? 'http://websitebmhg.test', '/');
-$ssoLoginUrl = $ssoServerUrl . '/login?redirect=' . urlencode($currentBaseUrl);
-$ssoGoogleUrl = $ssoServerUrl . '/google?redirect=' . urlencode($currentBaseUrl);
+$ssoCallbackUrl = $currentBaseUrl . '/sso-login';
+$ssoLoginUrl = $ssoServerUrl . '/login?redirect=' . urlencode($ssoCallbackUrl);
+$ssoGoogleUrl = $ssoServerUrl . '/google?redirect=' . urlencode($ssoCallbackUrl);
 
 $errorMessage = $_GET['error'] ?? null;
+if (!empty($_SESSION['pending_share_token']) && empty($errorMessage)) {
+    header('Location: ' . $ssoGoogleUrl);
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="id" class="h-full">
