@@ -99,18 +99,71 @@ function imagePlaceholder(string $message = 'Preview tidak tersedia'): never {
     exit;
 }
 
+function imageResizeFallback(string $path, int $width, string $reason): never {
+    // Full preview may stream the original without decoding it into PHP memory.
+    // Thumbnail grids must never silently download a large original for every tile.
+    if ($width > 280) {
+        header('X-Drive-Preview-Mode: original');
+        streamMediaFile($path, getMimeType($path));
+    }
+    imagePlaceholder($reason);
+}
+
+function buildLargeJpegPreview(string $source, string $cache, int $width, int $height, bool $webp): bool {
+    $ffmpeg = __DIR__ . '/.local-server/tools/ffmpeg.exe';
+    $temporary = $cache . '.' . bin2hex(random_bytes(6)) . '.tmp';
+    $command = [$ffmpeg, '-hide_banner', '-nostdin', '-loglevel', 'error', '-y', '-protocol_whitelist', 'file,pipe',
+        '-threads', '1', '-max_alloc', '134217728', '-lowres', $width <= 280 ? '3' : '2', '-i', $source,
+        '-frames:v', '1', '-filter_threads', '1', '-vf', "scale=w='min($width,iw)':h='min($height,ih)':force_original_aspect_ratio=decrease",
+        '-threads', '1', '-c:v', $webp ? 'libwebp' : 'mjpeg', '-f', $webp ? 'webp' : 'image2', $temporary];
+    $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'w'],
+        2 => ['file', sys_get_temp_dir() . '/drive-image-error.log', 'a']], $pipes, null, null, ['bypass_shell' => true]);
+    if (!is_resource($process)) return false;
+    fclose($pipes[0]);
+    $started = microtime(true);
+    do {
+        usleep(50000);
+        $status = proc_get_status($process);
+        if (microtime(true) - $started > 10 || connection_aborted()) {
+            proc_terminate($process);
+            proc_close($process);
+            @unlink($temporary);
+            return false;
+        }
+    } while ($status['running']);
+    $exitCode = $status['exitcode'];
+    proc_close($process);
+    if ($exitCode !== 0 || !is_file($temporary) || filesize($temporary) === 0 || !@rename($temporary, $cache)) {
+        @unlink($temporary);
+        return false;
+    }
+    return true;
+}
+
 function serveOptimizedImage(string $path, int $width, int $height): never {
+    $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    if (in_array($extension, ['svg', 'ico'], true) && filesize($path) <= 1024 * 1024) {
+        if ($extension === 'svg') header("Content-Security-Policy: sandbox; default-src 'none'; style-src 'unsafe-inline'");
+        streamMediaFile($path, getMimeType($path));
+    }
     $size = @getimagesize($path);
     // Bound decode memory before GD allocates the original full-resolution bitmap.
-    if (!$size || !extension_loaded('gd') || $size[0] <= 0 || $size[1] <= 0
-        || $size[0] * $size[1] > 16000000 || filesize($path) > 40 * 1024 * 1024) imagePlaceholder();
-    $key = hash('sha256', $path . ':' . filemtime($path) . ':' . filesize($path) . ":$width:$height:v2");
+    if (!$size || $size[0] <= 0 || $size[1] <= 0) imageResizeFallback($path, $width, 'Format perlu dibuka sebagai file asli');
+    if (!extension_loaded('gd')) imageResizeFallback($path, $width, 'Resize belum tersedia di server');
+    $externalResize = false;
+    if ($size[0] * $size[1] > 16000000 || filesize($path) > 40 * 1024 * 1024) {
+        $externalResize = $size[2] === IMAGETYPE_JPEG && $size[0] * $size[1] <= 150000000
+            && filesize($path) <= 80 * 1024 * 1024 && function_exists('proc_open')
+            && is_file(__DIR__ . '/.local-server/tools/ffmpeg.exe');
+        if (!$externalResize) imageResizeFallback($path, $width, 'Gambar besar: klik untuk membuka');
+    }
+    $key = hash('sha256', $path . ':' . filemtime($path) . ':' . filesize($path) . ":$width:$height:v3");
     $directory = sys_get_temp_dir() . '/drive_thumb_cache';
-    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) imagePlaceholder();
+    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) imageResizeFallback($path, $width, 'Cache belum dapat ditulis');
     $webp = function_exists('imagewebp');
     $cache = $directory . '/' . $key . ($webp ? '.webp' : '.jpg');
     if (!is_file($cache)) {
-        if ((float)disk_free_space(sys_get_temp_dir()) < 512 * 1024 * 1024) imagePlaceholder('Disk hampir penuh');
+        if ((float)disk_free_space(sys_get_temp_dir()) < 512 * 1024 * 1024) imageResizeFallback($path, $width, 'Disk hampir penuh');
         requireWorkSlot('image', 2);
         $lock = @fopen($cache . '.lock', 'c');
         if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
@@ -120,12 +173,15 @@ function serveOptimizedImage(string $path, int $width, int $height): never {
         }
         try {
             if (!is_file($cache)) {
+                if ($externalResize) {
+                    if (!buildLargeJpegPreview($path, $cache, $width, $height, $webp)) imageResizeFallback($path, $width, 'Gambar besar: klik untuk membuka');
+                } else {
                 $loader = match ($size[2]) {
                     IMAGETYPE_JPEG => 'imagecreatefromjpeg', IMAGETYPE_PNG => 'imagecreatefrompng',
                     IMAGETYPE_WEBP => 'imagecreatefromwebp', IMAGETYPE_GIF => 'imagecreatefromgif',
                     IMAGETYPE_BMP => 'imagecreatefrombmp', default => null,
                 };
-                if (!$loader || !function_exists($loader) || !($source = @$loader($path))) imagePlaceholder();
+                if (!$loader || !function_exists($loader) || !($source = @$loader($path))) imageResizeFallback($path, $width, 'Format perlu dibuka sebagai file asli');
                 $ratio = min(1, $width / $size[0], $height / $size[1]);
                 $targetWidth = max(1, (int)round($size[0] * $ratio));
                 $targetHeight = max(1, (int)round($size[1] * $ratio));
@@ -140,7 +196,8 @@ function serveOptimizedImage(string $path, int $width, int $height): never {
                 imagedestroy($target);
                 if (!$saved || !@rename($temporary, $cache)) {
                     @unlink($temporary);
-                    imagePlaceholder();
+                    imageResizeFallback($path, $width, 'Cache belum dapat ditulis');
+                }
                 }
             }
         } finally {

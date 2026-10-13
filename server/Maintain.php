@@ -36,4 +36,17 @@ if (is_dir($cacheRoot)) {
         }
     }
 }
+$videoRoot = dirname(__DIR__) . '/.local-server/video';
+if (is_dir($videoRoot)) {
+    $checked = 0;
+    foreach (new DirectoryIterator($videoRoot) as $file) {
+        if ($file->isDot()) continue;
+        if (++$checked > 5000) break;
+        if (!$file->isFile() || $file->getMTime() >= time() - 7 * 86400) continue;
+        if (preg_match('/^[a-f0-9]{64}\.(mp4|part\.mp4|state\.json)$/', $file->getFilename())) {
+            $key = substr($file->getFilename(), 0, 64);
+            if (!is_file($videoRoot . '/' . $key . '.job.json') && @unlink($file->getPathname())) $removed++;
+        }
+    }
+}
 echo "Maintenance: $removed temporary entries removed.\n";

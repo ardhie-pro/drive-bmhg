@@ -17,6 +17,10 @@ if (!(Test-Path "$ApacheRoot/bin/httpd.exe") -or !(Test-Path "$PhpRoot/php8apach
 $phpIni = Get-Content -Raw "$PhpRoot/php.ini"
 $phpIni += "`nextension_dir = `"$PhpRoot/ext`"`nmemory_limit = 192M`nupload_max_filesize = 3M`npost_max_size = 4M`ndisplay_errors = Off`nlog_errors = On`nerror_log = `"$runtimePath/php-error.log`"`n"
 $phpIni += "session.save_path = `"$runtimePath/sessions`"`nsession.cookie_httponly = 1`nsession.cookie_samesite = Lax`nsession.use_strict_mode = 1`n"
+$sessionHasher = [System.Security.Cryptography.SHA256]::Create()
+$sessionHash = [BitConverter]::ToString($sessionHasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($repoPath))).Replace('-', '').Substring(0, 12)
+$sessionHasher.Dispose()
+$phpIni += "session.name = DRIVE_$($sessionHash)_$Port`n"
 if ($phpIni -notmatch '(?m)^\s*zend_extension\s*=.*opcache' -and (Test-Path "$PhpRoot/ext/php_opcache.dll")) {
     $phpIni += "zend_extension = `"$PhpRoot/ext/php_opcache.dll`"`nopcache.enable = 1`nopcache.memory_consumption = 64`nopcache.validate_timestamps = 1`nopcache.revalidate_freq = 2`n"
 }
@@ -65,7 +69,7 @@ SetEnv DRIVE_LOCAL_DEV $devMode
 <Directory "$repoPath/tests">
     Require all denied
 </Directory>
-<FilesMatch "^(config\.php|media\.php|upload-metadata\.php|\.user\.ini|\.gitignore|README.*)$">
+<FilesMatch "^(config\.php|media\.php|video\.php|upload-metadata\.php|\.user\.ini|\.gitignore|README.*)$">
     Require all denied
 </FilesMatch>
 <DirectoryMatch "/\.git">
@@ -82,4 +86,15 @@ if ($PrepareOnly) { return }
 & "$PhpRoot/php.exe" "$PSScriptRoot/Maintain.php"
 Write-Host "Drive BMHG: http://127.0.0.1:$Port | mode $(if ($Production) {'SSO aktif'} else {'development localhost'})"
 Write-Host 'Ctrl+C untuk berhenti. Untuk Cloudflare gunakan -Production.'
-& "$ApacheRoot/bin/httpd.exe" -f "$runtimePath/httpd.conf"
+$workerProcess = $null
+$ffmpegPath = "$runtimePath/tools/ffmpeg.exe"
+if (Test-Path $ffmpegPath) {
+    $workerProcess = Start-Process -FilePath "$PhpRoot/php.exe" -ArgumentList @(('"' + "$repoPath/server/VideoWorker.php" + '"'), ('"' + $ffmpegPath + '"')) -WindowStyle Hidden -RedirectStandardOutput "$runtimePath/video-worker.log" -RedirectStandardError "$runtimePath/video-worker-error.log" -PassThru
+} else {
+    Write-Host 'Mode video hemat belum aktif. Jalankan server/Install-FFmpeg.ps1 lalu restart server.'
+}
+try {
+    & "$ApacheRoot/bin/httpd.exe" -f "$runtimePath/httpd.conf"
+} finally {
+    if ($workerProcess -and !$workerProcess.HasExited) { & taskkill.exe /PID $workerProcess.Id /T /F | Out-Null }
+}

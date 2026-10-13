@@ -24,7 +24,7 @@ Point the tunnel to `http://127.0.0.1:8085`. Production keeps SSO enabled, inclu
 
 - Cached WebP/JPEG thumbnails up to 280px; previews up to 1600x1200, with an explicit original-image link.
 - Four thumbnail requests per browser; two image conversions per application instance. Requests for folders that were left are cancelled.
-- Inputs over 16 million pixels or 40 MB receive a placeholder to prevent excessive GD allocation; the original is still available explicitly.
+- Large JPEGs (up to 150 million pixels / 80 MB) use FFmpeg's reduced-resolution JPEG decoding when installed, with two simultaneous image jobs and a ten-second timeout. This avoids allocating the full bitmap inside PHP. Other inputs over 16 million pixels / 40 MB receive a lightweight grid placeholder; opening their preview streams the original without PHP decoding. This is also the fallback for unsupported resizing or unavailable cache. Small SVG/ICO images are served directly.
 - Correct single byte-range responses for video/audio and resumable single-file downloads, including byte zero, suffixes, HEAD and invalid-range responses.
 - Eight concurrent file transfers, four upload requests, and one archive operation. Excess work receives HTTP 503 and Retry-After instead of starting unlimited expensive requests. Thumbnail and upload requests retry with a finite backoff; a direct download can need to be retried manually if all transfer slots are occupied.
 - PHP memory limit 192 MB per request. The supplied Apache server has 32 worker threads and OPcache enabled.
@@ -32,11 +32,35 @@ Point the tunnel to `http://127.0.0.1:8085`. Production keeps SSO enabled, inclu
 - Closing a preview aborts image requests and releases the video/audio source. Hidden browser tabs stop polling drives; visible tabs check every 15 seconds.
 - Media responses use private revalidated caching. Source code and server/test configuration are blocked from direct HTTP access by the supplied Apache configuration.
 
-These are conservative initial limits, not a guaranteed number of simultaneous users. Internet upload bandwidth, drive speed, video bitrate and laptop resources determine real capacity. This change does not transcode videos or create adaptive video renditions. Heavy original video can still buffer on a slow connection.
+These are conservative initial limits, not a guaranteed number of simultaneous users. Internet upload bandwidth, drive speed, video bitrate and laptop resources determine real capacity. Heavy original video can still buffer on a slow connection.
+
+## Cloudflare: low-bandwidth video previews
+
+Run these commands **on the computer serving the Cloudflare tunnel**, from this repository's directory:
+
+```powershell
+git pull origin feat/server
+powershell -ExecutionPolicy Bypass -File .\server\Install-FFmpeg.ps1
+powershell -ExecutionPolicy Bypass -File .\server\Start-DriveServer.ps1 -Production
+```
+
+Stop the old server before restarting on the same port. The installer downloads the Windows essentials build linked from the official FFmpeg download page and verifies SHA-256. Binaries stay in the ignored `.local-server/tools/` directory; they are not pushed to GitHub.
+
+If an existing XAMPP/Apache instance already serves the site, keep that server and run the worker separately instead of starting another web server:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\server\Start-VideoWorker.ps1 -PhpPath C:/xampp/php/php.exe
+```
+
+Keep this worker running. The supplied Start-DriveServer launcher starts/stops its worker automatically. The worker prepares one video at a time using two codec threads, caching H.264/AAC MP4 at up to 854x480, 24 fps, video peak bitrate 900 kbit/s and audio 64 kbit/s. Faststart places playback metadata at the beginning. The original upload is not changed.
+
+New video uploads are queued when a worker is active. Existing files are queued when preview is opened. The viewer defaults to **Hemat (480p)** and offers **Video asli** while conversion runs; cached previews are shared across authorized viewers. Without a worker, it falls back to the original and does not claim that an optimized version is ready.
+
+The pending queue is capped at 32 files. Sources above 4 GB, jobs taking over 30 minutes, outputs over 1 GB, or disk space below 512 MB fall back to original playback. Cache and worker status files are blocked from direct HTTP access; requests still authenticate against the original source. This is a single low-bandwidth rendition, not an adaptive HLS system. Actual internet playback still needs sufficient bandwidth for the rendition selected.
 
 ## Maintenance
 
-Startup removes upload temporary directories idle for over 24 hours and cached images older than seven days, checking at most 5,000 entries per category. Run this periodically on a continuously running server:
+Startup removes upload temporary directories idle for over 24 hours and cached images/videos older than seven days, checking at most 5,000 entries per category. Run this periodically on a continuously running server:
 
 ```powershell
 php server/Maintain.php
@@ -51,4 +75,4 @@ php tests/media-test.php
 node tests/client-media-test.cjs
 ```
 
-Integration/load checks were run against an isolated local Apache instance, with synthetic media and test sessions. External network capacity, real SSO login and video codec compatibility require separate validation with representative files and users.
+Integration/load checks were run against an isolated local Apache instance, with synthetic media and test sessions. An 18.2-megapixel JPEG and an H.264/AAC video were also tested, including low-bandwidth conversion, byte-range playback and browser playback at 854x480. External network capacity, real SSO login and other video codec compatibility require separate validation with representative files and users.

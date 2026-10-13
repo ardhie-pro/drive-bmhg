@@ -8,6 +8,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/upload-metadata.php';
 require_once __DIR__ . '/media.php';
+require_once __DIR__ . '/video.php';
 
 // Set execution limits for large file streaming / zip creation
 ini_set('memory_limit', '192M');
@@ -651,6 +652,9 @@ try {
                 $manifest['filePath'] = $finalDestination;
                 file_put_contents($manifestPath, json_encode($manifest));
                 for ($i = 0; $i < $totalChunks; $i++) @unlink($tempDir . DIRECTORY_SEPARATOR . sprintf('chunk_%05d', $i));
+                if (str_starts_with(getMimeType($finalDestination), 'video/')) {
+                    try { videoPreviewStatus($finalDestination); } catch (Throwable $error) { error_log('Video preview queue unavailable.'); }
+                }
 
                 sendJson([
                     'success' => true,
@@ -931,6 +935,20 @@ try {
 
             serveImageThumbnail($targetPath, 280, 280);
             exit;
+
+        case 'video_status':
+        case 'video_preview':
+            $source = realpath(normalizePath($_GET['path'] ?? ''));
+            if (!$source || !is_file($source)) sendJson(['success' => false, 'message' => 'Video tidak ditemukan.'], 404);
+            if (isPathExcluded($source, $excludedDrives)) sendJson(['success' => false, 'message' => 'Drive ini tidak diizinkan.'], 403);
+            if (!str_starts_with(getMimeType($source), 'video/')) sendJson(['success' => false, 'message' => 'File bukan video.'], 400);
+            if ($action === 'video_status') sendJson(['success' => true] + videoPreviewStatus($source));
+            $cachedVideo = videoCacheRoot() . '/' . videoCacheKey($source) . '.mp4';
+            if (!is_file($cachedVideo)) {
+                header('Retry-After: 3');
+                sendJson(['success' => false, 'message' => 'Versi hemat belum siap.'], 503);
+            }
+            streamMediaFile($cachedVideo, 'video/mp4');
 
         case 'preview':
             $targetPath = normalizePath($_GET['path'] ?? '');

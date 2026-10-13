@@ -1597,3 +1597,7 @@ tr.selected {
 .drag-target { outline: 3px solid #0284c7; background: #e0f2fe !important; }
 .upload-attribution { font-size: 11px; color: #64748b; font-weight: 400; margin-top: 4px; white-space: normal; overflow-wrap: anywhere; }
 .preview-original-link { position: absolute; right: 16px; bottom: 16px; z-index: 2; }
+.video-preview-layout { display: flex; flex-direction: column; align-items: center; width: 100%; max-height: 100%; gap: 12px; }
+.video-preview-layout .preview-video { min-height: 0; max-height: calc(75vh - 100px); }
+.video-quality-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; color: #cbd5e1; }
+.video-quality-controls select { padding: 8px 12px; border-radius: 8px; background: #1e293b; color: #f8fafc; border: 1px solid #475569; }

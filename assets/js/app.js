@@ -1443,44 +1443,131 @@ class DriveApp {
         if (previewGeneration !== this.previewGeneration) return;
         this.previewObjectUrl = URL.createObjectURL(smallBlob);
         img.src = this.previewObjectUrl;
+        const metadata = await this.fetchWithRetry(previewUrl, { method: 'HEAD', signal: controller.signal });
+        if (previewGeneration !== this.previewGeneration) return;
+        if (metadata.headers.get('X-Drive-Preview-Mode') === 'original') {
+          // Stream a large fallback image directly instead of buffering the entire file in JS.
+          this.previewDirectImage = img;
+          img.onerror = () => this.showToast('Gambar asli gagal dimuat atau format belum didukung browser.', 'error');
+          img.src = previewUrl;
+          return;
+        }
         const response = await this.fetchWithRetry(previewUrl, { signal: controller.signal });
         const blob = await response.blob();
         if (previewGeneration !== this.previewGeneration) return;
         URL.revokeObjectURL(this.previewObjectUrl);
         this.previewObjectUrl = URL.createObjectURL(blob);
         img.src = this.previewObjectUrl;
+        img.onerror = () => {
+          if (previewGeneration === this.previewGeneration) this.showToast('Format gambar ini belum didukung browser atau file rusak. Gunakan Lihat gambar asli atau Unduh.', 'error');
+        };
       } catch (error) {
         if (error.name !== 'AbortError' && previewGeneration === this.previewGeneration) this.showToast('Preview gagal dimuat. Gunakan gambar asli atau coba lagi.', 'error');
       }
     } else if (type === 'video') {
+      const layout = document.createElement('div');
+      layout.className = 'video-preview-layout';
+      const controls = document.createElement('div');
+      controls.className = 'video-quality-controls';
+      const quality = document.createElement('select');
+      quality.setAttribute('aria-label', 'Kualitas video');
+      quality.innerHTML = '<option value="light">Hemat (480p)</option><option value="original">Video asli</option>';
+      const statusLabel = document.createElement('span');
+      statusLabel.textContent = 'Menyiapkan versi hemat. Pilih Video asli untuk menonton sekarang.';
+      controls.append(quality, statusLabel);
       const videoEl = document.createElement('video');
       videoEl.className = 'preview-video';
       videoEl.controls = true;
       videoEl.autoplay = true;
       videoEl.preload = 'metadata';
       videoEl.playsInline = true;
-      videoEl.src = previewUrl;
+      let lightReady = false;
+      let mediaRetries = 0;
+      const setVideoSource = (url) => {
+        clearTimeout(this.videoRetryTimer);
+        const position = videoEl.currentTime || 0;
+        videoEl.pause();
+        videoEl.src = url;
+        videoEl.onloadedmetadata = () => {
+          if (previewGeneration !== this.previewGeneration) return;
+          if (position > 0 && Number.isFinite(videoEl.duration)) videoEl.currentTime = Math.min(position, videoEl.duration);
+          videoEl.play().catch(() => {});
+        };
+        videoEl.load();
+      };
+      quality.addEventListener('change', () => {
+        if (quality.value === 'original') {
+          statusLabel.textContent = 'Memutar file asli; kebutuhan internet mengikuti ukuran/bitrate video.';
+          setVideoSource(previewUrl);
+        } else if (lightReady) {
+          statusLabel.textContent = 'Memutar versi hemat (480p).';
+          setVideoSource(`api.php?action=video_preview&path=${encodeURIComponent(item.path)}`);
+        } else {
+          videoEl.pause();
+          videoEl.removeAttribute('src');
+          videoEl.load();
+          statusLabel.textContent = 'Versi hemat masih disiapkan. Video asli tersedia sementara.';
+        }
+      });
+      const checkLightVideo = async () => {
+        if (previewGeneration !== this.previewGeneration) return;
+        const controller = new AbortController();
+        this.previewController = controller;
+        try {
+          const response = await this.fetchWithRetry(`api.php?action=video_status&path=${encodeURIComponent(item.path)}`, { signal: controller.signal });
+          const result = await response.json();
+          if (previewGeneration !== this.previewGeneration) return;
+          if (result.state === 'ready') {
+            lightReady = true;
+            if (quality.value === 'light') {
+              statusLabel.textContent = 'Memutar versi hemat (480p).';
+              setVideoSource(`api.php?action=video_preview&path=${encodeURIComponent(item.path)}`);
+            }
+            return;
+          }
+          if (result.state === 'unavailable' || result.state === 'failed') {
+            quality.value = 'original';
+            quality.querySelector('option[value="light"]').disabled = true;
+            statusLabel.textContent = result.message || 'Versi hemat belum tersedia. Memutar video asli.';
+            setVideoSource(previewUrl);
+            return;
+          }
+          if (quality.value === 'light') statusLabel.textContent = result.message || 'Menyiapkan versi hemat. Video asli tersedia sementara.';
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          statusLabel.textContent = 'Belum dapat menyiapkan versi hemat. Pilih Video asli atau coba lagi.';
+        }
+        if (previewGeneration === this.previewGeneration) this.videoPollTimer = setTimeout(checkLightVideo, 3000);
+      };
       videoEl.addEventListener('waiting', () => {
         if (previewGeneration !== this.previewGeneration) return;
         if (!this.mediaWaitingNotice) {
-          this.showToast('Video sedang buffering. Menunggu data dari drive/server.', 'info');
+          statusLabel.textContent = 'Menunggu data video. Jika memakai Video asli, coba mode Hemat.';
           this.mediaWaitingNotice = true;
         }
       });
-      videoEl.addEventListener('playing', () => { this.mediaWaitingNotice = false; });
+      videoEl.addEventListener('playing', () => {
+        this.mediaWaitingNotice = false;
+        mediaRetries = 0;
+        statusLabel.textContent = quality.value === 'light' ? 'Memutar versi hemat (480p).' : 'Memutar video asli.';
+      });
       videoEl.onerror = () => {
         if (previewGeneration !== this.previewGeneration) return;
-        this.el.previewContainer.innerHTML = `
-          <div style="text-align:center; color:#E2E8F0; padding:24px;">
-            <div style="font-size:3rem; margin-bottom:12px;">🎬</div>
-            <p style="margin-bottom:8px; font-weight:600;">Video gagal dimuat. Server mungkin sedang sibuk atau format belum didukung.</p>
-            <p style="font-size:0.85rem; color:#94A3B8; margin-bottom:16px;">Silakan unduh file untuk memutarnya menggunakan aplikasi pemutar video lokal di komputer Anda.</p>
-            <button class="btn btn-primary" onclick="driveApp.downloadItem('${encodeURIComponent(item.path)}', false)">Unduh File Video</button>
-          </div>
-        `;
+        const source = videoEl.getAttribute('src');
+        if (source && mediaRetries < 2) {
+          mediaRetries++;
+          statusLabel.textContent = 'Pemuatan video terganggu. Mencoba lagi...';
+          this.videoRetryTimer = setTimeout(() => {
+            if (previewGeneration === this.previewGeneration) setVideoSource(source);
+          }, 2000);
+          return;
+        }
+        statusLabel.textContent = 'Video belum dapat dimuat. Coba buka ulang, pilih kualitas lain, atau unduh file asli.';
       };
       this.el.previewContainer.innerHTML = '';
-      this.el.previewContainer.appendChild(videoEl);
+      layout.append(videoEl, controls);
+      this.el.previewContainer.appendChild(layout);
+      checkLightVideo();
     } else if (type === 'audio') {
       const audioContainer = document.createElement('div');
       audioContainer.style.textAlign = 'center';
@@ -1533,9 +1620,13 @@ class DriveApp {
   }
 
   stopPreview() {
+    clearTimeout(this.videoPollTimer);
+    clearTimeout(this.videoRetryTimer);
     this.previewGeneration = (this.previewGeneration || 0) + 1;
     this.previewController?.abort();
     this.previewController = null;
+    this.previewDirectImage?.removeAttribute('src');
+    this.previewDirectImage = null;
     if (this.previewObjectUrl) URL.revokeObjectURL(this.previewObjectUrl);
     this.previewObjectUrl = null;
     this.mediaWaitingNotice = false;

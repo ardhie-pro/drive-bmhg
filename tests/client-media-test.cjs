@@ -2,7 +2,7 @@ const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert/strict');
 const source = fs.readFileSync(require('path').join(__dirname, '../assets/js/app.js'), 'utf8');
-const context = { AbortController, AbortSignal, Response, DOMException, URL, Event, setTimeout,
+const context = { AbortController, AbortSignal, Response, DOMException, URL, Event, setTimeout, clearTimeout,
   document: { addEventListener() {} }, window: { location: {} } };
 vm.createContext(context);
 vm.runInContext(source + '\nthis.App = DriveApp;', context);
