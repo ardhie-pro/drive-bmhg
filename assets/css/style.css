@@ -1593,3 +1593,6 @@ tr.selected {
   background-color: #EFF6FF !important;
 }
 
+/* File movement and uploader information */
+.drag-target { outline: 3px solid #0284c7; background: #e0f2fe !important; }
+.upload-attribution { font-size: 11px; color: #64748b; font-weight: 400; margin-top: 4px; white-space: normal; overflow-wrap: anywhere; }

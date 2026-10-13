@@ -6,6 +6,7 @@
  */
 
 declare(strict_types=1);
+require_once __DIR__ . '/upload-metadata.php';
 
 // Set execution limits for large file streaming / zip creation
 ini_set('memory_limit', '1024M');
@@ -421,8 +422,10 @@ try {
             $totalItems = 0;
             $totalSize = 0;
 
+            $uploadMetadata = readUploadMetadata($path);
             foreach ($handle as $item) {
                 if ($item === '.' || $item === '..') continue;
+                if (strtolower($item) === UPLOAD_METADATA_FILE) continue;
 
                 // Sembunyikan file sistem Windows jika diaktifkan di config
                 if ($hideSystemFiles) {
@@ -447,6 +450,7 @@ try {
 
                 $entries[] = [
                     'name' => $item,
+                    'uploadedBy' => $uploadMetadata[strtolower($item)] ?? null,
                     'path' => $fullPath,
                     'isDir' => $isDir,
                     'size' => $size,
@@ -513,6 +517,35 @@ try {
             }
             break;
 
+        case 'move':
+            if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+                sendJson(['success' => false, 'message' => 'Gunakan POST.'], 405);
+            }
+            $source = realpath(normalizePath($_POST['source'] ?? ''));
+            $destinationDir = realpath(normalizePath($_POST['destination'] ?? ''));
+            if (!$source || !$destinationDir || !is_dir($destinationDir)
+                || strtolower(basename($source)) === UPLOAD_METADATA_FILE
+                || preg_match('/^[A-Za-z]:[\\\\\/]?$/', $source)) {
+                sendJson(['success' => false, 'message' => 'Sumber atau folder tujuan tidak valid.'], 400);
+            }
+            if (isPathExcluded($source, $excludedDrives) || isPathExcluded($destinationDir, $excludedDrives)) {
+                sendJson(['success' => false, 'message' => 'Drive ini tidak diizinkan.'], 403);
+            }
+            $destination = $destinationDir . DIRECTORY_SEPARATOR . basename($source);
+            if (strtolower($destinationDir) === strtolower($source)
+                || str_starts_with(strtolower($destinationDir . DIRECTORY_SEPARATOR), strtolower($source . DIRECTORY_SEPARATOR))) {
+                sendJson(['success' => false, 'message' => 'Folder tidak bisa dipindahkan ke dalam dirinya sendiri.'], 400);
+            }
+            if (file_exists($destination)) {
+                sendJson(['success' => false, 'message' => 'Nama yang sama sudah ada di folder tujuan.'], 409);
+            }
+            if (!@rename($source, $destination)) {
+                sendJson(['success' => false, 'message' => 'Gagal memindahkan. Periksa izin dan pastikan file tidak sedang dibuka.'], 500);
+            }
+            transferUploadMetadata($source, $destination);
+            sendJson(['success' => true, 'message' => 'Berhasil dipindahkan.', 'newPath' => $destination]);
+            break;
+
         case 'rename':
             $oldPath = normalizePath($_POST['oldPath'] ?? '');
             $newName = trim($_POST['newName'] ?? '');
@@ -538,6 +571,7 @@ try {
             }
 
             if (@rename($oldPath, $newPath)) {
+                if (strtolower($oldPath) !== strtolower($newPath)) transferUploadMetadata($oldPath, $newPath);
                 sendJson(['success' => true, 'message' => 'Berhasil mengubah nama.', 'newPath' => $newPath]);
             } else {
                 sendJson(['success' => false, 'message' => 'Gagal mengubah nama. File mungkin sedang digunakan.'], 500);
@@ -580,6 +614,7 @@ try {
             }
 
             if (deleteRecursive($targetPath)) {
+                setUploadMetadata($targetPath, null);
                 sendJson(['success' => true, 'message' => 'Berhasil dihapus.']);
             } else {
                 sendJson(['success' => false, 'message' => 'Gagal menghapus file/folder. Pastikan tidak sedang dibuka oleh aplikasi lain.'], 500);
@@ -593,6 +628,15 @@ try {
             $chunkIndex = (int)($_POST['chunkIndex'] ?? 0);
             $totalChunks = (int)($_POST['totalChunks'] ?? 1);
             $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', $_POST['uploadId'] ?? uniqid('upl_', true));
+            if ($totalChunks < 1 || $totalChunks > 100000 || $chunkIndex < 0 || $chunkIndex >= $totalChunks) {
+                sendJson(['success' => false, 'message' => 'Nomor potongan tidak valid.'], 400);
+            }
+            foreach (preg_split('/[\\\\\/]/', $relativePath ?: $fileName) as $segment) {
+                if ($segment === '..' || str_contains($segment, ':') || str_contains($segment, "\0")
+                    || strtolower($segment) === UPLOAD_METADATA_FILE) {
+                    sendJson(['success' => false, 'message' => 'Nama atau path upload tidak valid.'], 400);
+                }
+            }
 
             if (isPathExcluded($targetDir, $excludedDrives)) {
                 sendJson(['success' => false, 'message' => 'Akses ke drive ini diblokir pada konfigurasi keamanan.'], 403);
@@ -606,7 +650,7 @@ try {
                 sendJson(['success' => false, 'message' => 'Gagal menerima potongan file.'], 400);
             }
 
-            $tempDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'local_drive_uploads' . DIRECTORY_SEPARATOR . $uploadId;
+            $tempDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'local_drive_uploads' . DIRECTORY_SEPARATOR . hash('sha256', session_id() . ':' . $uploadId);
             if (!is_dir($tempDir)) {
                 @mkdir($tempDir, 0777, true);
             }
@@ -667,6 +711,13 @@ try {
                 }
                 fclose($outHandle);
                 @rmdir($tempDir);
+
+                $user = $_SESSION['drive_user'] ?? null;
+                setUploadMetadata($finalDestination, [
+                    'id' => $user['id'] ?? null,
+                    'name' => $user['name'] ?? 'Developer lokal (tanpa login)',
+                    'uploadedAt' => date(DATE_ATOM),
+                ]);
 
                 sendJson([
                     'success' => true,
@@ -778,6 +829,7 @@ try {
                 }
                 if (file_exists($targetPath)) {
                     if (deleteRecursive($targetPath)) {
+                        setUploadMetadata($targetPath, null);
                         $deletedCount++;
                     } else {
                         $failedCount++;

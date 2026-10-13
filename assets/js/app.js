@@ -234,6 +234,7 @@ class DriveApp {
 
     // Drag & drop on window with recursive folder extraction
     window.addEventListener('dragover', (e) => {
+      if (this.internalDrag || !Array.from(e.dataTransfer?.types || []).includes('Files')) return;
       e.preventDefault();
       this.el.dropOverlay.classList.add('active');
     });
@@ -242,10 +243,14 @@ class DriveApp {
       e.preventDefault();
       this.el.dropOverlay.classList.remove('active');
     });
+    window.addEventListener('dragleave', (event) => {
+      if (!event.relatedTarget) this.el.dropOverlay.classList.remove('active');
+    });
 
     window.addEventListener('drop', async (e) => {
       e.preventDefault();
       this.el.dropOverlay.classList.remove('active');
+      if (this.internalDrag) return;
       if (e.dataTransfer) {
         const entries = await this.parseDropItems(e.dataTransfer);
         if (entries && entries.length > 0) {
@@ -405,6 +410,7 @@ class DriveApp {
         this.navigate(drive.path);
       });
 
+      this.bindDragItem(card, { isDir: true, path: drive.path }, false);
       this.el.driveList.appendChild(card);
     });
   }
@@ -499,6 +505,7 @@ class DriveApp {
       itemEl.textContent = part;
 
       const pathTarget = cumulativePath;
+      this.bindDragItem(itemEl, { isDir: true, path: pathTarget }, false);
       if (index !== parts.length - 1) {
         itemEl.addEventListener('click', () => this.navigate(pathTarget));
       }
@@ -645,6 +652,7 @@ class DriveApp {
       card.querySelector('.rename-btn')?.addEventListener('click', () => this.openRenameModal(item));
       card.querySelector('.delete-btn')?.addEventListener('click', () => this.openDeleteModal(item));
 
+      this.bindDragItem(card, item);
       this.el.fileGrid.appendChild(card);
     });
 
@@ -723,6 +731,7 @@ class DriveApp {
       card.querySelector('.rename-btn')?.addEventListener('click', () => this.openRenameModal(item));
       card.querySelector('.delete-btn')?.addEventListener('click', () => this.openDeleteModal(item));
 
+      this.bindDragItem(card, item);
       this.el.fileGallery.appendChild(card);
     });
 
@@ -791,7 +800,65 @@ class DriveApp {
       tr.querySelector('.rename-btn')?.addEventListener('click', () => this.openRenameModal(item));
       tr.querySelector('.delete-btn')?.addEventListener('click', () => this.openDeleteModal(item));
 
+      this.bindDragItem(tr, item);
       this.el.fileListTbody.appendChild(tr);
+    });
+  }
+
+  bindDragItem(element, item, draggable = true) {
+    element.draggable = draggable;
+    element.addEventListener('dragstart', (event) => {
+      if (!draggable) return;
+      this.internalDrag = this.selectedPaths.has(item.path) ? [...this.selectedPaths] : [item.path];
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('application/x-drive-paths', JSON.stringify(this.internalDrag));
+    });
+    element.addEventListener('dragend', () => {
+      this.internalDrag = null;
+      document.querySelectorAll('.drag-target').forEach(el => el.classList.remove('drag-target'));
+      this.el.dropOverlay.classList.remove('active');
+    });
+    if (!item.isDir) {
+      const badge = document.createElement('div');
+      badge.className = 'upload-attribution';
+      badge.textContent = item.uploadedBy ? `Diunggah oleh ${item.uploadedBy.name}` : 'Pengunggah belum tercatat';
+      badge.title = item.uploadedBy?.uploadedAt || '';
+      (element.querySelector('.file-name, .gallery-name, td') || element).appendChild(badge);
+      return;
+    }
+    element.addEventListener('dragover', (event) => {
+      if (!this.internalDrag) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'move';
+      element.classList.add('drag-target');
+    });
+    element.addEventListener('dragleave', (event) => {
+      if (!element.contains(event.relatedTarget)) element.classList.remove('drag-target');
+    });
+    element.addEventListener('drop', async (event) => {
+      if (!this.internalDrag) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const paths = [...this.internalDrag];
+      this.internalDrag = null;
+      element.classList.remove('drag-target');
+      for (const source of paths) {
+        try {
+          const response = await fetch('api.php', {
+            method: 'POST',
+            body: new URLSearchParams({ action: 'move', source, destination: item.path })
+          });
+          if (response.status === 401) { window.location.href = 'login.php'; return; }
+          const result = await response.json();
+          this.showToast(result.message, result.success ? 'success' : 'error');
+        } catch {
+          this.showToast('Koneksi gagal saat memindahkan file.', 'error');
+        }
+      }
+      this.selectedPaths.clear();
+      this.dirCache.clear();
+      this.loadDirectory(this.currentPath);
     });
   }
 
@@ -1010,29 +1077,35 @@ class DriveApp {
   /* Chunked File & Folder Upload Engine */
   async handleFilesUpload(files) {
     if (!files || files.length === 0) return;
+    if (!this.currentPath) {
+      this.showToast('Buka drive atau folder tujuan sebelum mengunggah.', 'error');
+      return;
+    }
+    const targetDir = this.currentPath;
 
     this.el.uploadDrawer.classList.add('show');
 
     for (const item of files) {
-      await this.uploadSingleFileChunked(item);
+      await this.uploadSingleFileChunked(item, targetDir);
     }
 
+    this.dirCache.clear();
     this.loadDirectory(this.currentPath);
   }
 
-  async uploadSingleFileChunked(item) {
+  async uploadSingleFileChunked(item, targetDir = this.currentPath) {
     const file = item.file || item;
     const relativePath = item.relativePath || file.name;
     const uploadId = 'upl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
     const chunkSize = 2 * 1024 * 1024; // 2MB chunk
-    const totalChunks = Math.ceil(file.size / chunkSize);
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
 
     const itemEl = document.createElement('div');
     itemEl.className = 'upload-item';
     itemEl.id = uploadId;
     itemEl.innerHTML = `
       <div class="upload-item-header">
-        <span class="upload-item-name" title="${relativePath}">${relativePath}</span>
+        <span class="upload-item-name"></span>
         <span class="upload-item-pct">0%</span>
       </div>
       <div class="upload-progress-bg">
@@ -1040,6 +1113,8 @@ class DriveApp {
       </div>
     `;
     this.el.uploadQueueList.prepend(itemEl);
+    itemEl.querySelector('.upload-item-name').textContent = relativePath;
+    itemEl.querySelector('.upload-item-name').title = relativePath;
 
     const bar = itemEl.querySelector('.upload-progress-bar');
     const pct = itemEl.querySelector('.upload-item-pct');
@@ -1051,7 +1126,7 @@ class DriveApp {
 
       const formData = new FormData();
       formData.append('action', 'upload_chunk');
-      formData.append('targetDir', this.currentPath);
+      formData.append('targetDir', targetDir);
       formData.append('fileName', file.name);
       formData.append('relativePath', relativePath);
       formData.append('chunkIndex', chunkIndex);
