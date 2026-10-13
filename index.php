@@ -456,7 +456,7 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
         <label for="sharePermission" style="display:block;font-weight:600;margin:14px 0 6px;">Izin akses</label>
         <select id="sharePermission" class="form-input" style="width:100%;">
           <option value="viewer">Pelihat — lihat dan unduh</option>
-          <option value="editor">Editor — upload, buat folder, ubah nama, dan hapus isi folder</option>
+          <option value="editor">Editor — upload, buat folder, pindah, ubah nama, dan hapus isi folder</option>
         </select>
         <button id="btnCreateShare" class="btn btn-primary" style="margin-top:12px;">Buat link berbagi</button>
         <div id="shareLinksList" style="margin-top:16px;display:grid;gap:10px;"></div>

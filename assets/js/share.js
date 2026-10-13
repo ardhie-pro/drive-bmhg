@@ -8,6 +8,7 @@
   const crumbs = document.getElementById('sharedBreadcrumbs');
   const input = document.getElementById('sharedUploadInput');
   const dropZone = document.getElementById('sharedDropZone');
+  const itemDragType = 'application/x-drive-share-path';
   let currentPath = '';
 
   const api = async (action, params = {}, method = 'GET') => {
@@ -30,11 +31,46 @@
     return url.toString();
   };
 
+  async function moveItem(source, destination) {
+    if (!source) return;
+    const data = new FormData();
+    data.set('source', source);
+    data.set('destination', destination);
+    message.textContent = 'Memindahkan item…';
+    try {
+      await api('move', data, 'POST');
+      message.textContent = 'Item berhasil dipindahkan.';
+      await load();
+    } catch (error) {
+      message.textContent = error.message;
+    }
+  }
+
+  function installFolderDropTarget(element, getDestination) {
+    element.addEventListener('dragover', event => {
+      if (!event.dataTransfer?.types?.includes(itemDragType)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      element.classList.add('drop-target');
+    });
+    element.addEventListener('dragleave', event => {
+      if (!element.contains(event.relatedTarget)) element.classList.remove('drop-target');
+    });
+    element.addEventListener('drop', event => {
+      if (!event.dataTransfer?.types?.includes(itemDragType)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      element.classList.remove('drop-target');
+      moveItem(event.dataTransfer.getData(itemDragType), getDestination());
+    });
+  }
+
   function renderBreadcrumbs() {
     crumbs.replaceChildren();
     const root = document.createElement('button');
     root.textContent = rootName;
     root.addEventListener('click', () => navigate(''));
+    if (permission === 'editor') installFolderDropTarget(root, () => '');
     crumbs.append(root);
     let accumulated = '';
     for (const part of currentPath.split('/').filter(Boolean)) {
@@ -46,6 +82,7 @@
       button.textContent = part;
       button.dataset.path = accumulated;
       button.addEventListener('click', () => navigate(button.dataset.path));
+      if (permission === 'editor') installFolderDropTarget(button, () => button.dataset.path);
       crumbs.append(button);
     }
   }
@@ -60,10 +97,21 @@
     for (const item of items) {
       const card = document.createElement('article');
       card.className = 'shared-card';
+      if (permission === 'editor') {
+        card.draggable = true;
+        card.addEventListener('dragstart', event => {
+          if (event.target.closest('button,a')) { event.preventDefault(); return; }
+          event.dataTransfer.setData(itemDragType, item.path);
+          event.dataTransfer.effectAllowed = 'move';
+          card.classList.add('dragging');
+        });
+        card.addEventListener('dragend', () => card.classList.remove('dragging'));
+      }
       const thumb = document.createElement('div');
       thumb.className = 'shared-thumb';
       if (item.mimeType?.startsWith('image/')) {
         const image = document.createElement('img');
+        image.draggable = false;
         image.loading = 'lazy';
         image.alt = item.name;
         const thumbnailUrl = fileUrl('thumb', item.path);
@@ -112,6 +160,15 @@
         actions.append(preview, download);
       }
       if (permission === 'editor') {
+        if (item.isDir) installFolderDropTarget(card, () => item.path);
+        const move = document.createElement('button');
+        move.className = 'btn btn-secondary';
+        move.textContent = 'Pindahkan';
+        move.addEventListener('click', async () => {
+          const destination = prompt('Tujuan folder relatif dari folder utama (kosongkan untuk folder utama):', '');
+          if (destination === null) return;
+          await moveItem(item.path, destination.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''));
+        });
         const rename = document.createElement('button');
         rename.className = 'btn btn-secondary';
         rename.textContent = 'Ubah nama';
@@ -129,7 +186,7 @@
           const data = new FormData(); data.set('path', item.path);
           try { await api('delete', data, 'POST'); await load(); } catch (error) { message.textContent = error.message; }
         });
-        actions.append(rename, remove);
+        actions.append(move, rename, remove);
       }
       card.append(actions);
       if (item.isDir) card.querySelector('.shared-thumb').addEventListener('dblclick', () => navigate(item.path));
@@ -156,6 +213,23 @@
   }
 
   function navigate(path) { currentPath = path; load(); }
+  if (permission === 'editor') {
+    grid.addEventListener('dragover', event => {
+      if (!event.dataTransfer?.types?.includes(itemDragType) || event.target.closest('.shared-card')) return;
+      event.preventDefault();
+      grid.classList.add('drop-target');
+    });
+    grid.addEventListener('dragleave', event => {
+      if (!grid.contains(event.relatedTarget)) grid.classList.remove('drop-target');
+    });
+    grid.addEventListener('drop', event => {
+      if (!event.dataTransfer?.types?.includes(itemDragType) || event.target.closest('.shared-card')) return;
+      event.preventDefault();
+      grid.classList.remove('drop-target');
+      moveItem(event.dataTransfer.getData(itemDragType), currentPath);
+    });
+    if (dropZone) installFolderDropTarget(dropZone, () => currentPath);
+  }
   document.getElementById('sharedNewFolder')?.addEventListener('click', async () => {
     const name = prompt('Nama folder baru:');
     if (!name) return;
@@ -190,7 +264,12 @@
   if (dropZone) {
     dropZone.addEventListener('dragover', event => { event.preventDefault(); dropZone.classList.add('active'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
-    dropZone.addEventListener('drop', event => { event.preventDefault(); dropZone.classList.remove('active'); uploadFiles(Array.from(event.dataTransfer?.files || [])); });
+    dropZone.addEventListener('drop', event => {
+      event.preventDefault();
+      dropZone.classList.remove('active');
+      if (event.dataTransfer?.types?.includes(itemDragType)) return;
+      uploadFiles(Array.from(event.dataTransfer?.files || []));
+    });
   }
   load();
 })();

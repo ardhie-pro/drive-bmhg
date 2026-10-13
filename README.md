@@ -34,7 +34,7 @@ Point the tunnel to `http://127.0.0.1:8085`. Production keeps SSO enabled, inclu
 
 ## Folder link sharing
 
-Folder owners can create **Pelihat** or **Editor** links. Each recipient signs in through Google SSO on Beasiswa Mahaghora. A guest session can only list, preview and download files inside the shared folder; it cannot use the main Drive API. Editor links also allow uploads, new folders, renaming and deleting items inside that folder. Owners can revoke links from the folder's share dialog. Link records are kept under the private `.local-server/` directory and are not committed to Git.
+Folder owners can create **Pelihat** or **Editor** links. Each recipient signs in through Google SSO on Beasiswa Mahaghora. A guest session can only list, preview and download files inside the shared folder; it cannot use the main Drive API. Editor links also allow uploads, new folders, moving items between folders in the shared tree, renaming and deleting items. On desktop, drag an item onto a destination folder or breadcrumb; the **Pindahkan** button also works on touch devices. Owners can revoke links from the folder's share dialog. Link records are kept under the private `.local-server/` directory and are not committed to Git.
 
 Configure the BMHG SSO application to allow the callback path `/sso-login` on the Drive domain. The app sends guests directly to the BMHG Google login and returns them to the shared folder after SSO. Only users whose SSO identity is valid can use a link.
 

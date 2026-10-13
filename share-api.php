@@ -68,6 +68,52 @@ function shareDeleteTree(string $path): bool {
     }
     return @rmdir($path);
 }
+function shareMoveItem(array $share, string $root): never {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') sendJson(['success'=>false,'message'=>'Gunakan POST.'], 405);
+    shareRequireSameOrigin();
+    shareRequireEditor($share);
+    $sourceRelative = (string)($_POST['source'] ?? '');
+    $destinationRelative = (string)($_POST['destination'] ?? '');
+    $source = resolveSharePath($share, $sourceRelative);
+    $destination = resolveSharePath($share, $destinationRelative);
+    if (!$source || !$destination || !file_exists($source) || !is_dir($destination)) {
+        sendJson(['success'=>false,'message'=>'Item sumber atau folder tujuan tidak ditemukan di folder berbagi.'], 404);
+    }
+    if (strtolower($source) === strtolower($root)) sendJson(['success'=>false,'message'=>'Folder utama tautan tidak dapat dipindahkan.'], 403);
+    if (is_dir($source) && sharePathWithin($destination, $source)) {
+        sendJson(['success'=>false,'message'=>'Folder tidak dapat dipindahkan ke dalam dirinya sendiri.'], 400);
+    }
+    $sourceParent = dirname($source);
+    $destinationPath = $destination . DIRECTORY_SEPARATOR . basename($source);
+    if (strtolower($sourceParent) === strtolower($destination)) {
+        sendJson(['success'=>false,'message'=>'Item sudah berada di folder tujuan.'], 409);
+    }
+
+    // Coordinate moves with uploads and other moves touching either folder.
+    $directories = array_values(array_unique([$sourceParent, $destination], SORT_STRING));
+    usort($directories, static fn(string $a, string $b): int => strcasecmp($a, $b));
+    $locks = [];
+    try {
+        foreach ($directories as $directory) {
+            $lockPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_dest_' . hash('sha256', strtolower($directory)) . '.lock';
+            $lock = @fopen($lockPath, 'c');
+            if (!$lock || !flock($lock, LOCK_EX)) {
+                if ($lock) fclose($lock);
+                sendJson(['success'=>false,'message'=>'Folder sedang diproses. Coba lagi sebentar.'], 503);
+            }
+            $locks[] = $lock;
+        }
+        if (file_exists($destinationPath)) sendJson(['success'=>false,'message'=>'Nama item sudah digunakan di folder tujuan.'], 409);
+        if (!@rename($source, $destinationPath)) sendJson(['success'=>false,'message'=>'Item gagal dipindahkan. Pastikan kedua folder berada pada disk yang sama.'], 500);
+        transferUploadMetadata($source, $destinationPath);
+        sendJson(['success'=>true,'path'=>ltrim(str_replace(DIRECTORY_SEPARATOR, '/', substr($destinationPath, strlen(rtrim($root, DIRECTORY_SEPARATOR)))), '/')]);
+    } finally {
+        foreach (array_reverse($locks) as $lock) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+}
 function shareUploadChunk(array $share, string $root, array $user): never {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') sendJson(['success'=>false,'message'=>'Gunakan POST.'], 405);
     shareRequireSameOrigin();
@@ -208,6 +254,7 @@ try {
         sendJson(['success'=>true,'items'=>$items,'rootName'=>basename($root),'permission'=>$share['permission'],'currentPath'=>str_replace('\\','/',trim($relative,'/'))]);
     }
     if ($action === 'upload_chunk') shareUploadChunk($share, $root, $requestUser);
+    if ($action === 'move') shareMoveItem($share, $root);
     $relative = (string)($_GET['path'] ?? '');
     if ($action === 'rename' || $action === 'delete' || $action === 'create_folder') {
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') sendJson(['success'=>false,'message'=>'Gunakan POST.'], 405);
