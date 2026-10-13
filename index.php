@@ -43,7 +43,7 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
 
   <div class="app-layout">
     <!-- Sidebar: Drive list -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="driveSidebar">
       <div class="sidebar-header">
         <div class="brand">
           <img src="assets/images/logo-blue-ui.svg" alt="Logo Beasiswa Mahaghora" class="brand-bmhg-logo">
@@ -89,6 +89,7 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
         </div>
       </div>
     </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
 
     <!-- Main Workspace -->
     <main class="main-wrapper">
@@ -96,6 +97,11 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
       <header class="topbar">
         <div class="topbar-left">
           <div class="nav-buttons">
+            <button id="btnToggleSidebar" class="btn-nav mobile-sidebar-toggle" type="button" title="Pilih drive" aria-label="Pilih drive" aria-controls="driveSidebar" aria-expanded="false">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
+              </svg>
+            </button>
             <button id="btnNavUp" class="btn-nav" title="Naik satu tingkat (Parent Folder)">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="19" x2="12" y2="5"/>

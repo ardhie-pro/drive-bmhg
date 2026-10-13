@@ -141,6 +141,9 @@ class DriveApp {
   initElements() {
     this.el = {
       driveList: document.getElementById('driveList'),
+      sidebar: document.getElementById('driveSidebar'),
+      sidebarBackdrop: document.getElementById('sidebarBackdrop'),
+      btnToggleSidebar: document.getElementById('btnToggleSidebar'),
       driveCountBadge: document.getElementById('driveCountBadge'),
       btnRefreshDrives: document.getElementById('btnRefreshDrives'),
       breadcrumbs: document.getElementById('breadcrumbs'),
@@ -218,6 +221,20 @@ class DriveApp {
   }
 
   initEventListeners() {
+    const mobileSidebarQuery = window.matchMedia('(max-width: 900px)');
+    this.setMobileSidebarOpen(false);
+    this.el.btnToggleSidebar?.addEventListener('click', () => {
+      this.setMobileSidebarOpen(!this.el.sidebar?.classList.contains('open'));
+    });
+    this.el.sidebarBackdrop?.addEventListener('click', () => this.setMobileSidebarOpen(false));
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && this.el.sidebar?.classList.contains('open')) {
+        this.setMobileSidebarOpen(false);
+        this.el.btnToggleSidebar?.focus();
+      }
+    });
+    mobileSidebarQuery.addEventListener?.('change', () => this.setMobileSidebarOpen(false));
+
     // Refresh drives
     this.el.btnRefreshDrives?.addEventListener('click', () => {
       this.el.btnRefreshDrives.classList.add('rotating');
@@ -490,6 +507,7 @@ class DriveApp {
       `;
 
       card.addEventListener('click', () => {
+        this.setMobileSidebarOpen(false);
         this.navigate(drive.path);
       });
 
@@ -503,6 +521,15 @@ class DriveApp {
     this.currentPath = path;
     await this.loadDirectory(path);
     this.renderDriveList();
+  }
+
+  setMobileSidebarOpen(isOpen) {
+    const open = Boolean(isOpen);
+    this.el.sidebar?.classList.toggle('open', open);
+    this.el.sidebarBackdrop?.classList.toggle('show', open);
+    this.el.btnToggleSidebar?.setAttribute('aria-expanded', String(open));
+    document.body.classList.toggle('mobile-sidebar-open', open);
+    if (this.el.sidebar) this.el.sidebar.inert = !open && window.matchMedia('(max-width: 900px)').matches;
   }
 
   async loadDirectory(path, forceRefresh = false) {
@@ -897,6 +924,9 @@ class DriveApp {
         </div>
       `;
 
+      const galleryActions = card.querySelector('.gallery-actions-hover');
+      if (galleryActions) card.appendChild(galleryActions);
+
       const chk = card.querySelector('.file-select-checkbox');
       chk?.addEventListener('change', (e) => {
         e.stopPropagation();
@@ -1020,7 +1050,7 @@ class DriveApp {
       badge.className = 'upload-attribution';
       badge.textContent = item.uploadedBy ? `Diunggah oleh ${item.uploadedBy.name}` : 'Pengunggah belum tercatat';
       badge.title = item.uploadedBy?.uploadedAt || '';
-      (element.querySelector('.file-name, .gallery-name, td') || element).appendChild(badge);
+      (element.querySelector('.file-name, .gallery-name, .file-list-name-col') || element.querySelector('td:nth-child(2)') || element).appendChild(badge);
       return;
     }
     element.addEventListener('dragover', (event) => {
