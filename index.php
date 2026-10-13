@@ -14,10 +14,10 @@ if (!empty($config['sso_enabled']) && empty($_SESSION['drive_user'])) {
 }
 
 $currentUser = $_SESSION['drive_user'] ?? [
-    'id' => 1,
-    'name' => 'Admin Mahaghora',
-    'email' => 'admin@beasiswamahaghora.com',
-    'status' => 'admin'
+    'id' => null,
+    'name' => 'Developer lokal',
+    'email' => '',
+    'status' => 'local'
 ];
 $userName = $currentUser['name'] ?? 'Admin Mahaghora';
 $userRole = ucfirst($currentUser['status'] ?? 'Admin');
@@ -32,7 +32,7 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
   
   <link rel="shortcut icon" href="assets/images/logo-white.png">
   <link rel="icon" type="image/png" href="assets/images/logo-white.png">
-  <link rel="stylesheet" href="assets/css/style.css">
+  <link rel="stylesheet" href="assets/css/style.css?v=<?= filemtime(__DIR__ . '/assets/css/style.css') ?>">
 </head>
 <body>
 
@@ -188,7 +188,7 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
           </div>
 
           <!-- User SSO Profile Badge -->
-          <div class="user-profile-badge" title="Login via SSO BMHG (<?= htmlspecialchars($userRole) ?>)">
+          <div class="user-profile-badge" title="<?= !empty($config['sso_enabled']) ? 'Login via SSO BMHG' : 'Development localhost' ?> (<?= htmlspecialchars($userRole) ?>)">
             <div class="user-avatar-circle">
               <?= strtoupper(substr($userName, 0, 1)) ?>
             </div>
@@ -493,6 +493,6 @@ $userRole = ucfirst($currentUser['status'] ?? 'Admin');
   <!-- Toast Container -->
   <div id="toastContainer" class="toast-container"></div>
 
-  <script src="assets/js/app.js"></script>
+  <script src="assets/js/app.js?v=<?= filemtime(__DIR__ . '/assets/js/app.js') ?>"></script>
 </body>
 </html>

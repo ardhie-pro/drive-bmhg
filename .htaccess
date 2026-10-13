@@ -1,5 +1,7 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
+    RewriteRule ^(?:\.git|\.local-server|server|tests)(?:/|$) - [F,L]
+    RewriteRule ^(?:config\.php|media\.php|upload-metadata\.php|\.user\.ini|\.gitignore)$ - [F,L]
 
     # Forward /sso-login to sso-login.php
     RewriteRule ^sso-login/?$ sso-login.php [L,QSA]

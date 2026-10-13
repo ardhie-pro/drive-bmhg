@@ -18,6 +18,10 @@ class DriveApp {
     this.historyIndex = -1;
     this.dirCache = new Map();
     this.imageObserver = null;
+    this.thumbnailQueue = [];
+    this.thumbnailRequests = new Map();
+    this.thumbnailUrls = new Set();
+    this.uploadChain = Promise.resolve();
     this.selectedPaths = new Set();
 
     this.initImageObserver();
@@ -35,15 +39,13 @@ class DriveApp {
             const img = entry.target;
             const src = img.getAttribute('data-src');
             if (src) {
-              img.src = src;
-              img.removeAttribute('data-src');
-              img.onload = () => img.classList.add('loaded');
+              this.enqueueThumbnail(img, src);
             }
             observer.unobserve(img);
           }
         });
       }, {
-        rootMargin: '350px 0px',
+        rootMargin: '100px 0px',
         threshold: 0.01
       });
     }
@@ -53,14 +55,81 @@ class DriveApp {
     if (!container) return;
     const lazyImages = container.querySelectorAll('img[data-src]');
     lazyImages.forEach(img => {
+      img.onerror = () => { img.outerHTML = this.getFileIconSvg('image', false); };
       if (this.imageObserver) {
         this.imageObserver.observe(img);
       } else {
-        img.src = img.getAttribute('data-src');
-        img.removeAttribute('data-src');
-        img.onload = () => img.classList.add('loaded');
+        this.enqueueThumbnail(img, img.getAttribute('data-src'));
       }
     });
+  }
+
+  enqueueThumbnail(img, src) {
+    img.removeAttribute('data-src');
+    this.thumbnailQueue.push({ img, src });
+    this.pumpThumbnails();
+  }
+
+  cancelThumbnails() {
+    this.imageObserver?.disconnect();
+    this.thumbnailQueue = [];
+    this.thumbnailRequests.forEach(controller => controller.abort());
+    this.thumbnailUrls.forEach(url => URL.revokeObjectURL(url));
+    this.thumbnailUrls.clear();
+  }
+
+  pumpThumbnails() {
+    while (this.thumbnailRequests.size < 4 && this.thumbnailQueue.length) {
+      const { img, src } = this.thumbnailQueue.shift();
+      if (!img.isConnected) continue;
+      const controller = new AbortController();
+      this.thumbnailRequests.set(img, controller);
+      this.fetchWithRetry(src, { signal: controller.signal }).then(response => response.blob()).then(blob => {
+        if (!img.isConnected || controller.signal.aborted) return;
+        const url = URL.createObjectURL(blob);
+        this.thumbnailUrls.add(url);
+        img.onload = () => img.classList.add('loaded');
+        img.src = url;
+      }).catch(error => {
+        if (error.name !== 'AbortError' && img.isConnected) img.dispatchEvent(new Event('error'));
+      }).finally(() => {
+        this.thumbnailRequests.delete(img);
+        this.pumpThumbnails();
+      });
+    }
+  }
+
+  async fetchWithRetry(url, options = {}) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const timeout = AbortSignal.timeout(30000);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      options.signal?.addEventListener('abort', abort, { once: true });
+      timeout.addEventListener('abort', abort, { once: true });
+      if (options.signal?.aborted) controller.abort();
+      let retryDelay = 500 * (2 ** attempt);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        if (response.status === 401) { window.location.href = 'login.php'; throw new Error('Silakan login kembali.'); }
+        if (response.status !== 503 && response.status !== 429) {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          // Keep timeout and cancellation active until the small image/JSON body is received.
+          const body = await response.arrayBuffer();
+          return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+        }
+        retryDelay = Math.min(5000, (Number(response.headers.get('Retry-After')) || 1) * 1000);
+        await response.body?.cancel();
+      } catch (error) {
+        if (options.signal?.aborted || (error.name !== 'TypeError' && !timeout.aborted)) throw error;
+        if (attempt === 3) throw error;
+      } finally {
+        options.signal?.removeEventListener('abort', abort);
+        timeout.removeEventListener('abort', abort);
+      }
+      if (attempt === 3) throw new Error('Server sedang sibuk. Coba lagi sebentar.');
+      await new Promise(resolve => setTimeout(resolve, retryDelay + Math.random() * 250));
+      if (options.signal?.aborted) throw new DOMException('Dibatalkan', 'AbortError');
+    }
   }
 
   initElements() {
@@ -281,10 +350,10 @@ class DriveApp {
   initDrivePolling() {
     this.isPollingDrives = false;
     setInterval(() => {
-      if (!this.isPollingDrives) {
+      if (!document.hidden && !this.isPollingDrives) {
         this.loadDrives(false, true);
       }
-    }, 5000);
+    }, 15000);
   }
 
   async loadDrives(isInitial = false, isBackground = false) {
@@ -529,6 +598,7 @@ class DriveApp {
   }
 
   renderItems() {
+    this.cancelThumbnails();
     if (this.filteredItems.length === 0) {
       if (this.el.emptyState) this.el.emptyState.style.display = 'flex';
       if (this.el.fileGrid) this.el.fileGrid.style.display = 'none';
@@ -599,7 +669,7 @@ class DriveApp {
       const isImage = type === 'image';
       const isArchive = type === 'archive';
       const isSelected = this.selectedPaths.has(item.path);
-      const thumbUrl = `api.php?action=thumb&path=${encodeURIComponent(item.path)}`;
+      const thumbUrl = `api.php?action=thumb&v=2&path=${encodeURIComponent(item.path)}`;
 
       const card = document.createElement('div');
       card.className = `file-card ${item.isDir ? 'is-dir' : `type-${type}`} ${isSelected ? 'selected' : ''}`;
@@ -617,7 +687,7 @@ class DriveApp {
           <button class="btn-action-icon delete-btn" title="Hapus"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
         </div>
         <div class="file-thumb">
-          ${isImage ? `<img data-src="${thumbUrl}" class="file-card-img-thumb" decoding="async" alt="${item.name}" onerror="this.outerHTML='${this.getFileIconSvg('image', false)}'">` : this.getFileIconSvg(type, item.isDir)}
+          ${isImage ? `<img data-src="${thumbUrl}" class="file-card-img-thumb" decoding="async" alt="${item.name}">` : this.getFileIconSvg(type, item.isDir)}
         </div>
         <div class="file-name" title="${item.name}">${item.name}</div>
         <div class="file-details">${item.isDir ? 'Folder' : item.sizeFormatted}</div>
@@ -668,7 +738,7 @@ class DriveApp {
       const isImage = type === 'image';
       const isArchive = type === 'archive';
       const isSelected = this.selectedPaths.has(item.path);
-      const thumbUrl = `api.php?action=thumb&path=${encodeURIComponent(item.path)}`;
+      const thumbUrl = `api.php?action=thumb&v=2&path=${encodeURIComponent(item.path)}`;
 
       const card = document.createElement('div');
       card.className = `gallery-card ${item.isDir ? 'is-dir' : `type-${type}`} ${isSelected ? 'selected' : ''}`;
@@ -679,7 +749,7 @@ class DriveApp {
         </div>
         <div class="gallery-thumb">
           ${isImage ? `
-            <img data-src="${thumbUrl}" class="gallery-img" decoding="async" alt="${item.name}" onerror="this.outerHTML='<div class=\\'gallery-icon-wrap\\'>${this.getFileIconSvg('image', false)}</div>'">
+            <img data-src="${thumbUrl}" class="gallery-img" decoding="async" alt="${item.name}">
             <span class="gallery-badge-type">${item.extension.toUpperCase()}</span>
           ` : `
             <div class="gallery-icon-wrap">${this.getFileIconSvg(type, item.isDir)}</div>
@@ -1082,15 +1152,13 @@ class DriveApp {
       return;
     }
     const targetDir = this.currentPath;
-
-    this.el.uploadDrawer.classList.add('show');
-
-    for (const item of files) {
-      await this.uploadSingleFileChunked(item, targetDir);
-    }
-
-    this.dirCache.clear();
-    this.loadDirectory(this.currentPath);
+    this.uploadChain = this.uploadChain.catch(() => {}).then(async () => {
+      this.el.uploadDrawer.classList.add('show');
+      for (const item of files) await this.uploadSingleFileChunked(item, targetDir);
+      this.dirCache.clear();
+      await this.loadDirectory(this.currentPath);
+    });
+    return this.uploadChain;
   }
 
   async uploadSingleFileChunked(item, targetDir = this.currentPath) {
@@ -1135,7 +1203,7 @@ class DriveApp {
       formData.append('chunk', chunkBlob);
 
       try {
-        const res = await fetch('api.php', {
+        const res = await this.fetchWithRetry('api.php', {
           method: 'POST',
           body: formData
         });
@@ -1154,7 +1222,7 @@ class DriveApp {
       } catch (err) {
         pct.textContent = 'Error';
         pct.style.color = 'var(--accent-rose)';
-        this.showToast(`Gagal koneksi saat upload ${relativePath}`, 'error');
+        this.showToast(`Upload ${relativePath} gagal: ${err.message}`, 'error');
         return;
       }
     }
@@ -1343,8 +1411,10 @@ class DriveApp {
 
   /* File Preview Modal */
   async openPreview(item) {
+    this.stopPreview();
+    const previewGeneration = this.previewGeneration;
     const type = this.getFileTypeCategory(item);
-    const previewUrl = `api.php?action=preview&path=${encodeURIComponent(item.path)}`;
+    const previewUrl = `api.php?action=preview&v=2&path=${encodeURIComponent(item.path)}`;
 
     this.el.previewTitle.textContent = item.name;
     this.el.previewContainer.innerHTML = '<div style="color:var(--text-muted);">Memuat berkas...</div>';
@@ -1354,15 +1424,34 @@ class DriveApp {
 
     if (type === 'image') {
       const img = document.createElement('img');
-      img.src = previewUrl;
       img.className = 'preview-img';
-      img.onload = () => {
-        this.el.previewContainer.innerHTML = '';
-        this.el.previewContainer.appendChild(img);
-      };
-      img.onerror = () => {
-        this.el.previewContainer.innerHTML = '<div style="color:var(--accent-rose);">Gagal memuat gambar.</div>';
-      };
+      this.el.previewContainer.innerHTML = '';
+      this.el.previewContainer.appendChild(img);
+      const original = document.createElement('a');
+      original.href = previewUrl + '&original=1';
+      original.target = '_blank';
+      original.rel = 'noopener';
+      original.textContent = 'Lihat gambar asli';
+      original.className = 'btn btn-secondary preview-original-link';
+      this.el.previewContainer.appendChild(original);
+      const controller = new AbortController();
+      this.previewController = controller;
+      try {
+        // Cached thumbnail appears first while the screen-sized preview is prepared.
+        const thumbnail = await this.fetchWithRetry(`api.php?action=thumb&v=2&path=${encodeURIComponent(item.path)}`, { signal: controller.signal });
+        const smallBlob = await thumbnail.blob();
+        if (previewGeneration !== this.previewGeneration) return;
+        this.previewObjectUrl = URL.createObjectURL(smallBlob);
+        img.src = this.previewObjectUrl;
+        const response = await this.fetchWithRetry(previewUrl, { signal: controller.signal });
+        const blob = await response.blob();
+        if (previewGeneration !== this.previewGeneration) return;
+        URL.revokeObjectURL(this.previewObjectUrl);
+        this.previewObjectUrl = URL.createObjectURL(blob);
+        img.src = this.previewObjectUrl;
+      } catch (error) {
+        if (error.name !== 'AbortError' && previewGeneration === this.previewGeneration) this.showToast('Preview gagal dimuat. Gunakan gambar asli atau coba lagi.', 'error');
+      }
     } else if (type === 'video') {
       const videoEl = document.createElement('video');
       videoEl.className = 'preview-video';
@@ -1371,11 +1460,20 @@ class DriveApp {
       videoEl.preload = 'metadata';
       videoEl.playsInline = true;
       videoEl.src = previewUrl;
+      videoEl.addEventListener('waiting', () => {
+        if (previewGeneration !== this.previewGeneration) return;
+        if (!this.mediaWaitingNotice) {
+          this.showToast('Video sedang buffering. Menunggu data dari drive/server.', 'info');
+          this.mediaWaitingNotice = true;
+        }
+      });
+      videoEl.addEventListener('playing', () => { this.mediaWaitingNotice = false; });
       videoEl.onerror = () => {
+        if (previewGeneration !== this.previewGeneration) return;
         this.el.previewContainer.innerHTML = `
           <div style="text-align:center; color:#E2E8F0; padding:24px;">
             <div style="font-size:3rem; margin-bottom:12px;">🎬</div>
-            <p style="margin-bottom:8px; font-weight:600;">Format video tidak dapat diputar langsung di browser.</p>
+            <p style="margin-bottom:8px; font-weight:600;">Video gagal dimuat. Server mungkin sedang sibuk atau format belum didukung.</p>
             <p style="font-size:0.85rem; color:#94A3B8; margin-bottom:16px;">Silakan unduh file untuk memutarnya menggunakan aplikasi pemutar video lokal di komputer Anda.</p>
             <button class="btn btn-primary" onclick="driveApp.downloadItem('${encodeURIComponent(item.path)}', false)">Unduh File Video</button>
           </div>
@@ -1399,15 +1497,22 @@ class DriveApp {
         <iframe class="preview-iframe" src="${previewUrl}"></iframe>
       `;
     } else if (type === 'code' || type === 'doc' && ['txt', 'md', 'json', 'log', 'csv', 'ini', 'env', 'sql', 'xml'].includes(item.extension)) {
+      const controller = new AbortController();
+      this.previewController = controller;
       try {
-        const res = await fetch(previewUrl);
+        const res = await this.fetchWithRetry(previewUrl, {
+          signal: controller.signal,
+          headers: item.size > 524288 ? { Range: 'bytes=0-524287' } : {}
+        });
         const text = await res.text();
+        if (previewGeneration !== this.previewGeneration) return;
         const pre = document.createElement('pre');
         pre.className = 'preview-code-box';
-        pre.textContent = text;
+        pre.textContent = text + (item.size > 524288 ? '\n\n[Preview dibatasi 512 KB. Unduh untuk melihat file lengkap.]' : '');
         this.el.previewContainer.innerHTML = '';
         this.el.previewContainer.appendChild(pre);
       } catch (err) {
+        if (previewGeneration !== this.previewGeneration) return;
         this.el.previewContainer.innerHTML = '<div style="color:var(--accent-rose);">Gagal memuat teks file.</div>';
       }
     } else {
@@ -1424,8 +1529,24 @@ class DriveApp {
   closeModals() {
     document.querySelectorAll('.modal-overlay').forEach(modal => modal.classList.remove('active'));
     // Stop any playing audio/video
+    this.stopPreview();
+  }
+
+  stopPreview() {
+    this.previewGeneration = (this.previewGeneration || 0) + 1;
+    this.previewController?.abort();
+    this.previewController = null;
+    if (this.previewObjectUrl) URL.revokeObjectURL(this.previewObjectUrl);
+    this.previewObjectUrl = null;
+    this.mediaWaitingNotice = false;
     const media = this.el.previewContainer.querySelector('video, audio');
-    if (media) media.pause();
+    if (media) {
+      media.pause();
+      media.removeAttribute('src');
+      media.querySelectorAll('source').forEach(source => source.removeAttribute('src'));
+      media.load();
+    }
+    this.el.previewContainer.querySelector('iframe')?.removeAttribute('src');
   }
 
   showToast(message, type = 'info') {

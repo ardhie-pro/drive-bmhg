@@ -7,11 +7,11 @@ return [
     /**
      * Integrasi Single Sign-On (SSO) Website BMHG
      */
-    // Local development only: explicit opt-in on the loopback PHP server.
-    'sso_enabled' => !(PHP_SAPI === 'cli-server'
+    // Explicit opt-in applies only to direct localhost development requests.
+    'sso_enabled' => !(in_array(PHP_SAPI, ['cli-server', 'apache2handler'], true)
         && getenv('DRIVE_LOCAL_DEV') === '1'
         && in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true)
-        && in_array($_SERVER['SERVER_NAME'] ?? '', ['127.0.0.1', 'localhost', '::1'], true)),
+        && in_array(strtolower($_SERVER['HTTP_HOST'] ?? ''), ['127.0.0.1:8085', 'localhost:8085'], true)),
 
     /**
      * URL Website BMHG

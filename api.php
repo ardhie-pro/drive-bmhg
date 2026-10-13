@@ -7,9 +7,10 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/upload-metadata.php';
+require_once __DIR__ . '/media.php';
 
 // Set execution limits for large file streaming / zip creation
-ini_set('memory_limit', '1024M');
+ini_set('memory_limit', '192M');
 ini_set('max_execution_time', '3600');
 set_time_limit(3600);
 
@@ -58,6 +59,14 @@ if (session_status() === PHP_SESSION_ACTIVE) {
 }
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
+if (in_array($action, ['compress_bulk', 'compress_zip', 'extract_archive', 'download_bulk'], true)
+    || ($action === 'download' && is_dir(normalizePath($_GET['path'] ?? '')))) {
+    requireWorkSlot('archive', 1);
+    if ((float)disk_free_space(sys_get_temp_dir()) < 512 * 1024 * 1024) {
+        sendJson(['success' => false, 'message' => 'Ruang disk tidak cukup untuk memproses arsip.'], 507);
+    }
+}
+if ($action === 'upload_chunk') requireWorkSlot('upload', 4);
 
 function isPathExcluded(string $path, array $excludedDrives): bool {
     $clean = strtoupper(normalizePath($path));
@@ -113,139 +122,8 @@ function getMimeType(string $filePath): string {
 /**
  * Menghasilkan & men-cache thumbnail gambar super cepat (WebP / JPEG 240px)
  */
-function serveImageThumbnail(string $filePath, int $maxWidth = 240, int $maxHeight = 240): void {
-    if (session_status() === PHP_SESSION_ACTIVE) {
-        session_write_close();
-    }
-
-    while (ob_get_level()) {
-        ob_end_clean();
-    }
-
-    $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-
-    // SVG atau ICO langsung sajikan tanpa resize
-    if ($ext === 'svg' || $ext === 'ico') {
-        header('Content-Type: ' . ($ext === 'svg' ? 'image/svg+xml' : 'image/x-icon'));
-        header('Cache-Control: public, max-age=31536000, immutable');
-        readfile($filePath);
-        exit;
-    }
-
-    $mtime = @filemtime($filePath) ?: 0;
-    $fsize = @filesize($filePath) ?: 0;
-    $cacheKey = md5($filePath . '_' . $mtime . '_' . $fsize . '_' . $maxWidth . 'x' . $maxHeight);
-    $cacheDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_thumb_cache';
-
-    if (!is_dir($cacheDir)) {
-        @mkdir($cacheDir, 0777, true);
-    }
-
-    $supportWebp = function_exists('imagewebp');
-    $cacheExt = $supportWebp ? '.webp' : '.jpg';
-    $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . $cacheExt;
-    $etag = '"' . $cacheKey . '"';
-
-    // HTTP 304 Not Modified check jika browser sudah punya cache
-    if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
-        http_response_code(304);
-        header('Cache-Control: public, max-age=31536000, immutable');
-        header('ETag: ' . $etag);
-        exit;
-    }
-
-    // Jika file cache sudah ada di server, kirimkan langsung dalam 0ms
-    if (file_exists($cacheFile) && filesize($cacheFile) > 0) {
-        header('Content-Type: ' . ($supportWebp ? 'image/webp' : 'image/jpeg'));
-        header('Content-Length: ' . filesize($cacheFile));
-        header('Cache-Control: public, max-age=31536000, immutable');
-        header('ETag: ' . $etag);
-        readfile($cacheFile);
-        exit;
-    }
-
-    if (!extension_loaded('gd')) {
-        header('Content-Type: ' . getMimeType($filePath));
-        header('Cache-Control: public, max-age=604800');
-        readfile($filePath);
-        exit;
-    }
-
-    @ini_set('memory_limit', '256M');
-
-    // Buat thumbnail baru berukuran ringan
-    $srcImg = null;
-    switch ($ext) {
-        case 'jpg':
-        case 'jpeg':
-            if (function_exists('imagecreatefromjpeg')) $srcImg = @imagecreatefromjpeg($filePath);
-            break;
-        case 'png':
-            if (function_exists('imagecreatefrompng')) $srcImg = @imagecreatefrompng($filePath);
-            break;
-        case 'webp':
-            if (function_exists('imagecreatefromwebp')) $srcImg = @imagecreatefromwebp($filePath);
-            break;
-        case 'gif':
-            if (function_exists('imagecreatefromgif')) $srcImg = @imagecreatefromgif($filePath);
-            break;
-        case 'bmp':
-            if (function_exists('imagecreatefrombmp')) $srcImg = @imagecreatefrombmp($filePath);
-            break;
-    }
-
-    if (!$srcImg) {
-        header('Content-Type: ' . getMimeType($filePath));
-        header('Cache-Control: public, max-age=604800');
-        readfile($filePath);
-        exit;
-    }
-
-    $origW = imagesx($srcImg);
-    $origH = imagesy($srcImg);
-
-    if ($origW <= 0 || $origH <= 0) {
-        imagedestroy($srcImg);
-        header('Content-Type: ' . getMimeType($filePath));
-        readfile($filePath);
-        exit;
-    }
-
-    // Hitung dimensi target proporsional (max 240px)
-    $ratio = min($maxWidth / $origW, $maxHeight / $origH, 1.0);
-    $newW = max(1, (int)round($origW * $ratio));
-    $newH = max(1, (int)round($origH * $ratio));
-
-    $thumb = imagecreatetruecolor($newW, $newH);
-
-    // Support transparansi PNG / WebP / GIF
-    if ($ext === 'png' || $ext === 'webp' || $ext === 'gif') {
-        imagealphablending($thumb, false);
-        imagesavealpha($thumb, true);
-        $transparent = imagecolorallocatealpha($thumb, 255, 255, 255, 127);
-        imagefilledrectangle($thumb, 0, 0, $newW, $newH, $transparent);
-    }
-
-    imagecopyresampled($thumb, $srcImg, 0, 0, 0, 0, $newW, $newH, $origW, $origH);
-    imagedestroy($srcImg);
-
-    if ($supportWebp) {
-        @imagewebp($thumb, $cacheFile, 70);
-        header('Content-Type: image/webp');
-    } else {
-        @imagejpeg($thumb, $cacheFile, 75);
-        header('Content-Type: image/jpeg');
-    }
-
-    imagedestroy($thumb);
-
-    if (file_exists($cacheFile)) {
-        header('Content-Length: ' . filesize($cacheFile));
-        header('Cache-Control: public, max-age=31536000, immutable');
-        header('ETag: ' . $etag);
-        readfile($cacheFile);
-    }
-    exit;
+function serveImageThumbnail(string $filePath, int $maxWidth = 280, int $maxHeight = 280): void {
+    serveOptimizedImage($filePath, $maxWidth, $maxHeight);
 }
 
 /**
@@ -258,7 +136,7 @@ function getSystemDrives(array $excludedDrives = []): array {
     // Cache drive list selama 5 detik untuk performa maksimal
     if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 5) {
         $cached = @json_decode((string)file_get_contents($cacheFile), true);
-        if (is_array($cached) && !empty($cached)) {
+        if (is_array($cached)) {
             return $cached;
         }
     }
@@ -426,6 +304,7 @@ try {
             foreach ($handle as $item) {
                 if ($item === '.' || $item === '..') continue;
                 if (strtolower($item) === UPLOAD_METADATA_FILE) continue;
+                if (str_starts_with($item, '.drive-part-')) continue;
 
                 // Sembunyikan file sistem Windows jika diaktifkan di config
                 if ($hideSystemFiles) {
@@ -650,24 +529,52 @@ try {
                 sendJson(['success' => false, 'message' => 'Gagal menerima potongan file.'], 400);
             }
 
-            $tempDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'local_drive_uploads' . DIRECTORY_SEPARATOR . hash('sha256', session_id() . ':' . $uploadId);
+            if ((int)$_FILES['chunk']['size'] > 2 * 1024 * 1024) {
+                sendJson(['success' => false, 'message' => 'Potongan upload maksimal 2 MB.'], 413);
+            }
+            if ((float)disk_free_space(sys_get_temp_dir()) < 512 * 1024 * 1024
+                || (float)disk_free_space($targetDir) < 512 * 1024 * 1024) {
+                sendJson(['success' => false, 'message' => 'Ruang disk hampir penuh. Upload dihentikan.'], 507);
+            }
+            $tempDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_uploads_' . hash('sha256', __DIR__) . DIRECTORY_SEPARATOR . hash('sha256', session_id() . ':' . $uploadId);
             if (!is_dir($tempDir)) {
                 @mkdir($tempDir, 0777, true);
             }
+            $uploadLock = @fopen($tempDir . DIRECTORY_SEPARATOR . 'upload.lock', 'c');
+            if (!$uploadLock || !flock($uploadLock, LOCK_EX | LOCK_NB)) {
+                header('Retry-After: 1');
+                sendJson(['success' => false, 'retryable' => true, 'message' => 'Potongan sebelumnya masih diproses.'], 503);
+            }
+            register_shutdown_function(static function () use ($uploadLock): void {
+                flock($uploadLock, LOCK_UN);
+                fclose($uploadLock);
+            });
+            $manifestPath = $tempDir . DIRECTORY_SEPARATOR . 'manifest.json';
+            $signature = hash('sha256', $targetDir . ':' . $fileName . ':' . $relativePath . ':' . $totalChunks);
+            $manifest = is_file($manifestPath) ? json_decode(file_get_contents($manifestPath), true) : ['signature' => $signature];
+            if (($manifest['signature'] ?? '') !== $signature) {
+                sendJson(['success' => false, 'message' => 'Tujuan atau identitas upload berubah.'], 409);
+            }
+            if (!empty($manifest['completed'])) {
+                sendJson(['success' => true, 'completed' => true, 'filePath' => $manifest['filePath'], 'message' => 'Upload sudah selesai.']);
+            }
+            if (file_put_contents($manifestPath, json_encode($manifest)) === false) {
+                sendJson(['success' => false, 'message' => 'Gagal mencatat upload.'], 500);
+            }
 
             $chunkFile = $tempDir . DIRECTORY_SEPARATOR . sprintf('chunk_%05d', $chunkIndex);
+            $alreadyReceived = is_file($chunkFile);
             if (!move_uploaded_file($_FILES['chunk']['tmp_name'], $chunkFile)) {
                 sendJson(['success' => false, 'message' => 'Gagal menyimpan potongan file.'], 500);
             }
 
-            // Cek apakah seluruh chunks sudah terkirim
-            $isComplete = true;
-            for ($i = 0; $i < $totalChunks; $i++) {
-                if (!file_exists($tempDir . DIRECTORY_SEPARATOR . sprintf('chunk_%05d', $i))) {
-                    $isComplete = false;
-                    break;
-                }
+            // Constant-time completion check rather than rescanning every chunk on every request.
+            $manifest['received'] = ($manifest['received'] ?? 0) + ($alreadyReceived ? 0 : 1);
+            if (file_put_contents($manifestPath, json_encode($manifest)) === false) {
+                if (!$alreadyReceived) @unlink($chunkFile);
+                sendJson(['success' => false, 'message' => 'Gagal mencatat potongan upload.'], 500);
             }
+            $isComplete = $manifest['received'] === $totalChunks;
 
             if ($isComplete) {
                 if (!empty($relativePath)) {
@@ -685,32 +592,54 @@ try {
                     @mkdir($parentDest, 0777, true);
                 }
 
-                if (file_exists($finalDestination) && empty($relativePath)) {
-                    $info = pathinfo($cleanFileName);
+                // Serialize naming/commit in this folder so concurrent users never overwrite each other.
+                $destinationLockPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'drive_dest_' . hash('sha256', strtolower($parentDest)) . '.lock';
+                $destinationLock = @fopen($destinationLockPath, 'c');
+                if (!$destinationLock || !flock($destinationLock, LOCK_EX | LOCK_NB)) {
+                    header('Retry-After: 1');
+                    sendJson(['success' => false, 'retryable' => true, 'message' => 'Folder tujuan sedang menyelesaikan upload lain.'], 503);
+                }
+                register_shutdown_function(static function () use ($destinationLock): void {
+                    flock($destinationLock, LOCK_UN);
+                    fclose($destinationLock);
+                });
+                if (file_exists($finalDestination)) {
+                    $info = pathinfo($finalDestination);
                     $namePart = $info['filename'];
                     $extPart = isset($info['extension']) ? '.' . $info['extension'] : '';
-                    $finalDestination = rtrim($targetDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $namePart . '_' . date('Ymd_His') . $extPart;
+                    $finalDestination = $parentDest . DIRECTORY_SEPARATOR . $namePart . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . $extPart;
                 }
 
-                $outHandle = @fopen($finalDestination, 'wb');
+                $stagingPath = $parentDest . DIRECTORY_SEPARATOR . '.drive-part-' . bin2hex(random_bytes(8));
+                $outHandle = @fopen($stagingPath, 'xb');
                 if (!$outHandle) {
                     sendJson(['success' => false, 'message' => 'Gagal menulis file tujuan akhir. Periksa izin folder.'], 500);
                 }
+                register_shutdown_function(static function () use ($stagingPath): void { @unlink($stagingPath); });
 
                 for ($i = 0; $i < $totalChunks; $i++) {
                     $part = $tempDir . DIRECTORY_SEPARATOR . sprintf('chunk_%05d', $i);
                     $inHandle = fopen($part, 'rb');
+                    if (!$inHandle) {
+                        fclose($outHandle);
+                        sendJson(['success' => false, 'message' => 'Potongan upload tidak lengkap. Ulangi upload.'], 500);
+                    }
                     if ($inHandle) {
                         while (!feof($inHandle)) {
                             $buffer = fread($inHandle, 1048576);
-                            fwrite($outHandle, $buffer);
+                            if ($buffer === false || fwrite($outHandle, $buffer) !== strlen($buffer)) {
+                                fclose($inHandle);
+                                fclose($outHandle);
+                                sendJson(['success' => false, 'message' => 'Disk gagal menulis file. Coba ulang upload.'], 507);
+                            }
                         }
                         fclose($inHandle);
                     }
-                    @unlink($part);
                 }
                 fclose($outHandle);
-                @rmdir($tempDir);
+                if (!@rename($stagingPath, $finalDestination)) {
+                    sendJson(['success' => false, 'message' => 'Gagal menyelesaikan file upload.'], 500);
+                }
 
                 $user = $_SESSION['drive_user'] ?? null;
                 setUploadMetadata($finalDestination, [
@@ -718,6 +647,10 @@ try {
                     'name' => $user['name'] ?? 'Developer lokal (tanpa login)',
                     'uploadedAt' => date(DATE_ATOM),
                 ]);
+                $manifest['completed'] = true;
+                $manifest['filePath'] = $finalDestination;
+                file_put_contents($manifestPath, json_encode($manifest));
+                for ($i = 0; $i < $totalChunks; $i++) @unlink($tempDir . DIRECTORY_SEPARATOR . sprintf('chunk_%05d', $i));
 
                 sendJson([
                     'success' => true,
@@ -770,6 +703,7 @@ try {
             }
 
             $tempZip = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'bulk_download_' . uniqid('', true) . '.zip';
+            register_shutdown_function(static function () use ($tempZip): void { @unlink($tempZip); });
             $zip = new ZipArchive();
             if ($zip->open($tempZip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
                 http_response_code(500);
@@ -935,6 +869,7 @@ try {
                 }
                 $zipFileName = $folderName . '_' . date('Ymd_His') . '.zip';
                 $tempZipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('zip_', true) . '.zip';
+                register_shutdown_function(static function () use ($tempZipPath): void { @unlink($tempZipPath); });
 
                 if (!class_exists('ZipArchive')) {
                     http_response_code(500);
@@ -979,30 +914,8 @@ try {
                 exit;
             }
 
-            // Jika file biasa
-            $fileName = basename($targetPath);
-            $fileSize = (float)filesize($targetPath);
-            $mimeType = getMimeType($targetPath);
+            streamMediaFile($targetPath, getMimeType($targetPath), true);
 
-            while (ob_get_level()) {
-                ob_end_clean();
-            }
-
-            header('Content-Type: ' . $mimeType);
-            header('Content-Disposition: attachment; filename="' . rawurlencode($fileName) . '"');
-            header('Content-Length: ' . $fileSize);
-            header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
-            header('Pragma: public');
-            header('Expires: 0');
-
-            $fp = @fopen($targetPath, 'rb');
-            if ($fp) {
-                while (!feof($fp)) {
-                    echo fread($fp, 2097152);
-                    flush();
-                }
-                fclose($fp);
-            }
         case 'thumb':
             $targetPath = normalizePath($_GET['path'] ?? '');
 
@@ -1032,77 +945,11 @@ try {
                 die('File tidak ditemukan.');
             }
 
-            // Lepaskan lock session agar streaming video concurrent lancar
-            if (session_status() === PHP_SESSION_ACTIVE) {
-                session_write_close();
-            }
-
-            // Bersihkan semua output buffer PHP
-            while (ob_get_level()) {
-                ob_end_clean();
-            }
-
             $mimeType = getMimeType($targetPath);
-            $fileSize = (float)filesize($targetPath);
-
-            header('Content-Type: ' . $mimeType);
-            header('Accept-Ranges: bytes');
-            header('Content-Disposition: inline; filename="' . rawurlencode(basename($targetPath)) . '"');
-            header('Cache-Control: public, max-age=3600');
-
-            // Support Range Requests untuk Video & Audio playback
-            if (isset($_SERVER['HTTP_RANGE'])) {
-                $range = $_SERVER['HTTP_RANGE'];
-                if (preg_match('/bytes=\s*(\d+)?\s*-\s*(\d+)?/i', $range, $matches)) {
-                    $start = !empty($matches[1]) ? (float)$matches[1] : 0;
-                    $end = !empty($matches[2]) ? (float)$matches[2] : ($fileSize - 1);
-
-                    if (empty($matches[1]) && !empty($matches[2])) {
-                        // Range format: bytes=-500 (last 500 bytes)
-                        $start = max(0, $fileSize - (float)$matches[2]);
-                        $end = $fileSize - 1;
-                    }
-
-                    if ($start > $end || $start >= $fileSize) {
-                        http_response_code(416); // Requested Range Not Satisfiable
-                        header("Content-Range: bytes */$fileSize");
-                        exit;
-                    }
-
-                    $end = min($end, $fileSize - 1);
-                    $length = (int)($end - $start + 1);
-
-                    http_response_code(206);
-                    header("Content-Range: bytes $start-$end/$fileSize");
-                    header("Content-Length: $length");
-
-                    $fp = @fopen($targetPath, 'rb');
-                    if ($fp) {
-                        fseek($fp, (int)$start);
-                        $remaining = $length;
-                        while ($remaining > 0 && !feof($fp)) {
-                            $chunkSize = min($remaining, 1048576); // 1MB buffer
-                            $buffer = fread($fp, (int)$chunkSize);
-                            echo $buffer;
-                            flush();
-                            $remaining -= strlen($buffer);
-                        }
-                        fclose($fp);
-                    }
-                    exit;
-                }
+            if (str_starts_with($mimeType, 'image/') && empty($_GET['original'])) {
+                serveOptimizedImage($targetPath, 1600, 1200);
             }
-
-            header('Content-Length: ' . $fileSize);
-            $fp = @fopen($targetPath, 'rb');
-            if ($fp) {
-                while (!feof($fp)) {
-                    echo fread($fp, 2097152);
-                    flush();
-                }
-                fclose($fp);
-            }
-            exit;
+            streamMediaFile($targetPath, $mimeType);
 
         case 'compress_zip':
             $targetPath = normalizePath($_POST['path'] ?? '');
